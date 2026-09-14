@@ -1,6 +1,6 @@
 {
   "name": "mouseclik",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "点序 Windows 多点连点器",
   "main": "main.js",
   "private": true,

@@ -3,11 +3,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const source = require(path.join(root, 'package.json'));
-const packedRoot = path.join(root, 'dist/win-unpacked/resources/app');
+const distRoot = path.resolve(root, process.argv[2] || 'dist');
+const packedRoot = path.join(distRoot, 'win-unpacked/resources/app');
 const packed = JSON.parse(fs.readFileSync(path.join(packedRoot, 'package.json'), 'utf8'));
 assert.equal(packed.version, source.version, 'Packaged version differs from source');
 for (const file of source.build.files.filter((file) => file !== 'package.json')) {
   assert.ok(fs.readFileSync(path.join(root, file)).equals(fs.readFileSync(path.join(packedRoot, file))), `Stale packaged file: ${file}`);
 }
-assert.ok(fs.statSync(path.join(root, 'dist', `MouseClik-${source.version}-portable.exe`)).size > 0);
+assert.ok(fs.statSync(path.join(distRoot, `MouseClik-${source.version}-portable.exe`)).size > 0);
 console.log(`Verified portable ${source.version}: all packaged source files match.`);

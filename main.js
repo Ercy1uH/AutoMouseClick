@@ -289,6 +289,7 @@ async function createWindow() {
   mainWindow.webContents.on('render-process-gone', (_event, details) => desktopLog('renderer.gone', details));
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => desktopLog('renderer.load_error', { errorCode, errorDescription, validatedURL }));
   mainWindow.on('minimize', () => { if (floatingAutoShow) showFloatingWindow(); });
+  mainWindow.on('hide', () => { if (floatingAutoShow) showFloatingWindow(); });
   mainWindow.on('restore', () => { if (mainWindow.isFocused()) hideFloatingWindow(); });
   mainWindow.on('focus', () => hideFloatingWindow());
   mainWindow.on('blur', () => { if (floatingAutoShow) setTimeout(() => { if (mainWindow && !mainWindow.isFocused()) showFloatingWindow(); }, 120); });

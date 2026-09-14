@@ -13,6 +13,7 @@ const files = [
   'tests/auth.test.js', 'tests/backend.test.js', 'tests/debug-log.test.js',
   'tests/desktop.test.js', 'tests/floating.test.js', 'tests/history.test.js',
   'tests/point-settings-ui.cjs', 'tests/profile-store.test.js',
+  'tests/desktop-interactions.cjs', 'tests/startup-state.test.js',
   'tests/ui-smoke.cjs', 'tests/worker-settings.test.ps1',
 ];
 const checks = [

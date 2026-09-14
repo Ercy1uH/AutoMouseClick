@@ -75,7 +75,24 @@ const state = {
     { name: '采集流程 01', note: '4 个坐标点', points: structuredClone(defaultPoints), clickType: '左键单击', loops: 10, loopInterval: 800 },
     { name: '表单自动填写', note: '6 个坐标点', points: [{x:310,y:280,label:'输入框 01'},{x:600,y:280,label:'输入框 02'},{x:890,y:280,label:'输入框 03'},{x:310,y:510,label:'输入框 04'},{x:600,y:510,label:'输入框 05'},{x:890,y:510,label:'提交按钮'}], clickType:'左键单击', loops:1, loopInterval:500 },
     { name: '每日签到', note: '2 个坐标点', points: [{x:960,y:210,label:'签到入口'},{x:960,y:580,label:'领取奖励'}], clickType:'左键单击', loops:7, loopInterval:1200 }
-  ], // RV-20：不再写已废弃的 pointInterval（它会被 normalizeProfilePoints 删除，只会误导读者） active: 0, running: false, timer: null, progress: 0, captureStream: null, captureSize: { width: 1920, height: 1080 }, windows: [], nativeRunId: null, pendingRun: null, runStatus: 'idle', runSnapshot: null, statusPollTimer: null, statusPollFailures: 0, floatingAutoShow: readLocal('mouseclik.floatingAutoShow') !== 'false', hotkeys: readHotkeys(), listeningHotkey: null, persistenceReady: false
+  ],
+  active: 0,
+  running: false,
+  timer: null,
+  progress: 0,
+  captureStream: null,
+  captureSize: { width: 1920, height: 1080 },
+  windows: [],
+  nativeRunId: null,
+  pendingRun: null,
+  runStatus: 'idle',
+  runSnapshot: null,
+  statusPollTimer: null,
+  statusPollFailures: 0,
+  floatingAutoShow: readLocal('mouseclik.floatingAutoShow') !== 'false',
+  hotkeys: readHotkeys(),
+  listeningHotkey: null,
+  persistenceReady: false
 };
 
 const $ = (id) => document.getElementById(id);
@@ -669,10 +686,15 @@ function stopCapture(showToast = true) {
   if (showToast) toast('已停止窗口抓取');
 }
 async function captureWindow() {
-  if (!navigator.mediaDevices?.getDisplayMedia) { toast('当前浏览器不支持窗口抓取'); return; }
+  if ($('captureWindow').disabled) return;
   if (state.captureStream) { stopCapture(); return; }
   const windowId = $('targetWindow').value;
   if (!windowId) { toast('请先选择实际点击目标窗口'); return; }
+  const desktopCaptureAvailable = Boolean(navigator.mediaDevices?.getUserMedia && window.mouseclikDesktop?.getCaptureSource);
+  const pickerAvailable = Boolean(navigator.mediaDevices?.getDisplayMedia);
+  if (!desktopCaptureAvailable && !pickerAvailable) { toast('当前环境不支持窗口抓取'); return; }
+  $('captureWindow').disabled = true;
+  setCaptureStatus('正在连接目标窗口...');
   try {
     let captureSourceId = '';
     if (window.mouseclikDesktop?.setCaptureWindow) {
@@ -708,7 +730,10 @@ async function captureWindow() {
       : error.name === 'AbortError'
         ? '窗口捕获被取消或目标窗口不可用'
         : `无法抓取窗口：${error.message || '请重试'}`;
+    setCaptureStatus(message);
     toast(message);
+  } finally {
+    $('captureWindow').disabled = false;
   }
 }
 function addPoint(x, y) {
@@ -716,7 +741,7 @@ function addPoint(x, y) {
   if (!canEditPoints()) return;
   const profile = currentProfile();
   if (profile.steps.filter((step) => step.type === 'click').length >= PointSettings.MAX_CLICK_STEPS) return toast('最多支持 100 个点击步骤');
-  profile.steps.push({ type: 'click', x, y, label: '', labelAuto: true, clickType: profile.defaultClickType, clickCount: 1 }); PointSettings.applyAutoLabels(profile.steps); renderAll();
+  profile.steps.push({ type: 'click', x, y, label: '', labelAuto: true, clickType: profile.defaultClickType, clickCount: 1 }); PointSettings.applyAutoLabels(profile.steps); renderAll(); toast(`已添加坐标 X ${x}，Y ${y}`);
 }
 function addDelay() { if (!canEditPoints()) return; const steps = currentProfile().steps; if (steps.length >= PointSettings.MAX_STEPS) return toast('最多支持 200 个步骤'); steps.push({ type: 'delay', ms: PointSettings.DEFAULT_DELAY_MS }); renderAll(); }
 function updateRunDetail() { const p = currentProfile(); const clickSteps = p.steps.filter((step) => step.type === 'click'); const clicks = sumClicks(p.steps); const waits = p.steps.reduce((sum, step) => sum + (step.type === 'delay' ? step.ms : 0), 0); const repeatWaits = (clicks - clickSteps.length) * 50; const doubleWaits = clickSteps.filter((step) => step.clickType === PointSettings.DOUBLE_CLICK).reduce((sum, step) => sum + step.clickCount * 50, 0); const seconds = (100 + (waits + repeatWaits + doubleWaits) * p.loops + p.loopInterval * Math.max(0, p.loops - 1)) / 1000; const text = `共 ${p.steps.length} 步 · ${clicks * Math.max(1, p.loops)} 次点击 · 预计 ${formatDuration(seconds)}`; $('runDetail').textContent = text; return text; }

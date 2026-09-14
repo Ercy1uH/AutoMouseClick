@@ -24,6 +24,13 @@ const authStub = `window.mouseclikDesktop = { getServerToken: async () => '${TOK
     await page.goto('http://127.0.0.1:28332');
     const rows = page.locator('.click-row');
     assert.equal(await rows.count(), 4);
+    await page.locator('.screen-content').click({ position: { x: 20, y: 20 } });
+    assert.equal(await rows.count(), 5, 'workspace click creates a coordinate');
+    assert.match(await page.locator('#toast').textContent(), /X/);
+    await rows.last().locator('.point-remove').click();
+    await page.locator('#captureWindow').click();
+    assert.equal(await page.locator('#toast').textContent(), '请先选择实际点击目标窗口');
+    assert.deepEqual(errors, [], 'startup and initial interactions must not throw');
     await page.locator('#addPoint').click();
     await page.locator('#pointX').fill('123');
     await page.locator('#pointY').fill('456');
