@@ -6,9 +6,9 @@ const root = path.resolve(__dirname, '..');
 // Only reviewed source files belong in the export. New files require an explicit entry.
 const files = [
   '.gitattributes', '.gitignore', 'README.md', 'package.json', 'package-lock.json',
-  'app.js', 'debug-log.js', 'floating.css', 'floating.html', 'floating.js',
-  'index.html', 'main.js', 'native-click-worker.ps1', 'point-settings.js',
-  'preload.js', 'profile-store.js', 'run-history.js', 'server.js', 'style.css',
+  'src/renderer/app.js', 'src/core/debug-log.js', 'src/renderer/floating.css', 'src/renderer/floating.html', 'src/renderer/floating.js',
+  'src/renderer/index.html', 'src/main/main.js', 'src/worker/native-click-worker.ps1', 'src/renderer/point-settings.js',
+  'src/main/preload.js', 'src/core/profile-store.js', 'src/core/run-history.js', 'src/main/server.js', 'src/renderer/style.css',
   'scripts/prepare-github.cjs', 'scripts/verify-dist.cjs',
   'tests/auth.test.js', 'tests/backend.test.js', 'tests/debug-log.test.js',
   'tests/desktop.test.js', 'tests/floating.test.js', 'tests/history.test.js',

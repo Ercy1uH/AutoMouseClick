@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { ProfileStore, totalClicks } = require('../profile-store');
+const { ProfileStore, totalClicks } = require('../src/core/profile-store');
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mouseclik-points-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

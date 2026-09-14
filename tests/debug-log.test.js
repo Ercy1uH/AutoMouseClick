@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createDebugLog } = require('../debug-log');
+const { createDebugLog } = require('../src/core/debug-log');
 
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mouseclik-log-'));

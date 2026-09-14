@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { requireStepSettings, sanitizeStepSettings, resolveLabelAuto, pointsToSteps, legacyInterval, clickType, applyAutoLabels, MAX_POINT_CLICKS, MAX_STEPS, MAX_CLICK_STEPS, MAX_LOOPS, MAX_LOOP_INTERVAL, DEFAULT_CLICK_TYPE } = require('./point-settings');
+const { requireStepSettings, sanitizeStepSettings, resolveLabelAuto, pointsToSteps, legacyInterval, clickType, applyAutoLabels, MAX_POINT_CLICKS, MAX_STEPS, MAX_CLICK_STEPS, MAX_LOOPS, MAX_LOOP_INTERVAL, DEFAULT_CLICK_TYPE } = require('../renderer/point-settings');
 const SCHEMA_VERSION = 4, MIN_SCHEMA_VERSION = 1, MAX_PROFILES = 8, MAX_LABEL = 80;
 function clampNumber(value, min, max, fallback) { const number = Number(value); if (!Number.isFinite(number)) return fallback; return Math.max(min, Math.min(max, Math.round(number))); }
 function sanitizeStep(step, fallbackClickType, fallbackDelayMs) {

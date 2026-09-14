@@ -18,10 +18,10 @@ function desktopContext(fetch, options = {}) {
   let now = 0;
   const context = vm.createContext({
     require: (name) => name === 'electron' ? electron : name === 'fs' ? { mkdirSync() {} } : require(name),
-    __dirname: path.resolve(__dirname, '..'), process: { env: {}, platform: 'win32' }, Buffer, console,
+    __dirname: path.resolve(__dirname, '../src/main'), process: { env: {}, platform: 'win32' }, Buffer, console,
     fetch, AbortSignal, Date: { now: () => (now += 1000) }, setTimeout: options.setTimeout || ((callback) => { callback(); return 1; }), clearTimeout() {}
   });
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/main/main.js'), 'utf8'), context);
   return { context, app, Tray };
 }
 

@@ -1,18 +1,18 @@
 const http = require('http');
 const fs = require('fs');
-const { requireStepSettings, pointsToSteps, clickType, integer, MAX_STEPS, MAX_CLICK_STEPS, MAX_LOOPS, MAX_LOOP_INTERVAL, DEFAULT_CLICK_TYPE } = require('./point-settings');
+const { requireStepSettings, pointsToSteps, clickType, integer, MAX_STEPS, MAX_CLICK_STEPS, MAX_LOOPS, MAX_LOOP_INTERVAL, DEFAULT_CLICK_TYPE } = require('../renderer/point-settings');
 const path = require('path');
 const { execFile, execFileSync, spawn } = require('child_process');
 const { randomUUID } = require('crypto');
-const { RunHistory } = require('./run-history');
+const { RunHistory } = require('../core/run-history');
 let createDebugLog;
-try { ({ createDebugLog } = require('./debug-log')); } catch { /* VM tests may omit the helper module. */ }
-const { ProfileStore, totalClicks, MAX_POINT_CLICKS } = require('./profile-store');
-const dataDir = process.env.MOUSECLIK_DATA || __dirname;
+try { ({ createDebugLog } = require('../core/debug-log')); } catch { /* VM tests may omit the helper module. */ }
+const { ProfileStore, totalClicks, MAX_POINT_CLICKS } = require('../core/profile-store');
+const dataDir = process.env.MOUSECLIK_DATA || path.resolve(__dirname, '../..');
 const history = new RunHistory(path.join(dataDir, 'run-history.json'));
 const profileStore = new ProfileStore(path.join(dataDir, 'profiles.json'));
 
-const root = __dirname;
+const root = path.resolve(__dirname, '../renderer');
 const port = Number(process.env.PORT || 8000);
 // 端口只有一个权威（RV-03）：CORS 兜底与前端回退都从这里派生，不再硬编码 8000。
 const serverOrigin = `http://127.0.0.1:${port}`;
@@ -28,9 +28,9 @@ const MAX_BODY_BYTES = 1_000_000;
 // RV-01：只有界面真正加载的这几个文件可以被 HTTP 回源（与 package.json 的 files 列表一致）。
 // 目录穿越已在下面用带分隔符的前缀判断挡住，这里是第二道：源码与配置不会被下载。
 const STATIC_ALLOWLIST = new Set(['/index.html', '/floating.html', '/style.css', '/floating.css', '/app.js', '/floating.js', '/point-settings.js']);
-const workerPath = path.join(root, 'native-click-worker.ps1');
-const debugDir = process.env.MOUSECLIK_DATA ? path.join(process.env.MOUSECLIK_DATA, 'debug') : path.join(root, 'debug');
-const legacyDebugPath = process.env.MOUSECLIK_DATA ? path.join(process.env.MOUSECLIK_DATA, 'debug.log') : path.join(root, 'debug.log');
+const workerPath = path.resolve(__dirname, '../worker/native-click-worker.ps1');
+const debugDir = path.join(dataDir, 'debug');
+const legacyDebugPath = path.join(dataDir, 'debug.log');
 const runs = new Map();
 let activeRunId = null;
 let startingRun = false;
@@ -486,7 +486,7 @@ async function handle(req, res) {
     return send(res, 403, { error: '未授权的本机请求：缺少有效的访问凭据' });
   }
   if (req.method === 'GET' && url.pathname === '/api/health') return send(res, 200, {
-    app: 'mouseclik', version: require('./package.json').version, authorized: authorized(req)
+    app: 'mouseclik', version: require('../../package.json').version, authorized: authorized(req)
   });
   if (req.method === 'GET' && url.pathname === '/api/history') return send(res, 200, {
     entries: history.entries.map((entry) => {

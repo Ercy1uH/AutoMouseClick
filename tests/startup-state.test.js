@@ -4,12 +4,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const source = fs.readFileSync(path.join(__dirname, '../app.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '../src/renderer/app.js'), 'utf8');
 const startup = source.slice(0, source.indexOf('const $ ='));
 
 function initialState(savedSetting = null) {
   const context = vm.createContext({
-    PointSettings: require('../point-settings'), structuredClone,
+    PointSettings: require('../src/renderer/point-settings'), structuredClone,
     window: { location: { protocol: 'http:' } },
     localStorage: { getItem: (key) => key === 'mouseclik.floatingAutoShow' ? savedSetting : null }
   });

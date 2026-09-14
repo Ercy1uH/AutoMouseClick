@@ -28,9 +28,8 @@ npm run dist
 
 ## 项目结构
 
-- `main.js`、`preload.js`：Electron 窗口、系统快捷键和桌面桥接。
-- `app.js`、`index.html`、`style.css`：主界面。
-- `floating.*`：悬浮控制条。
-- `server.js`、`native-click-worker.ps1`：本地服务及 Windows 点击执行。
-- `profile-store.js`、`point-settings.js`、`run-history.js`、`debug-log.js`：配置、步骤、历史和日志。
+- `src/main/`：Electron 主进程、桌面桥接和本地服务。
+- `src/renderer/`：主界面、悬浮控制条与前后端共用的步骤规则。
+- `src/core/`：配置存储、运行历史和日志。
+- `src/worker/`：Windows 点击执行器。
 - `tests/`：自动化检查；`scripts/`：打包校验和源码导出。

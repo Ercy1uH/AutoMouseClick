@@ -15,7 +15,7 @@ test('floating control pauses running tasks and resumes paused tasks', () => {
     } },
     window: { mouseclikDesktop: { floatingAction: (action) => actions.push(action), onFloatingState: (fn) => { render = fn; }, onFloatingSettings() {} } }
   };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../floating.js'), 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/floating.js'), 'utf8'), context);
   const start = elements.get('startButton');
   render({ status: 'running' });
   assert.equal(start.disabled, false);

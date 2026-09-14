@@ -6,7 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { Writable } = require('node:stream');
 const { EventEmitter } = require('node:events');
-const { RunHistory } = require('../run-history');
+const { RunHistory } = require('../src/core/run-history');
 
 const TOKEN = 'test-token-0123456789';
 
@@ -23,7 +23,8 @@ function server(t, env = {}) {
   const sibling = `${dir}-evil`;
   fs.mkdirSync(sibling, { recursive: true });
   fs.writeFileSync(path.join(sibling, 'secret.txt'), 'TOP SECRET');
-  fs.writeFileSync(path.join(dir, 'index.html'), '<!doctype html><title>ok</title>');
+  fs.mkdirSync(path.join(dir, 'src/renderer'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'src/renderer/index.html'), '<!doctype html><title>ok</title>');
   fs.writeFileSync(path.join(dir, 'server.js'), '// source of the local service');
   t.after(() => { fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(sibling, { recursive: true, force: true }); });
   const native = {
@@ -37,16 +38,16 @@ function server(t, env = {}) {
     exit() {}
   });
   const context = vm.createContext({
-    require: (name) => name === './point-settings' ? require('../point-settings')
+    require: (name) => name === '../renderer/point-settings' ? require('../src/renderer/point-settings')
       : name === 'child_process' ? native
         : name === 'http' ? { createServer: () => ({ listen() {} }) }
-          : name === './run-history' ? { RunHistory }
-            : name === './profile-store' ? require('../profile-store')
-              : name === './package.json' ? require('../package.json')
+          : name === '../core/run-history' ? { RunHistory }
+            : name === '../core/profile-store' ? require('../src/core/profile-store')
+              : name === '../../package.json' ? require('../package.json')
                 : require(name),
-    __dirname: dir, process: proc, Buffer, URL, console, setTimeout, clearTimeout
+    __dirname: path.join(dir, 'src/main'), process: proc, Buffer, URL, console, setTimeout, clearTimeout
   });
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/main/server.js'), 'utf8'), context);
   t.after(async () => { await vm.runInContext('debugWriteQueue', context); });
   return { context, dir, handle: vm.runInContext('handle', context) };
 }

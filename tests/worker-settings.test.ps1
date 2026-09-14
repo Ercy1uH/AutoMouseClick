@@ -1,5 +1,5 @@
 ﻿$ErrorActionPreference = 'Stop'
-$worker = Join-Path $PSScriptRoot '..\native-click-worker.ps1'
+$worker = Join-Path $PSScriptRoot '..\src\worker\native-click-worker.ps1'
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($worker, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw ($errors | Out-String) }

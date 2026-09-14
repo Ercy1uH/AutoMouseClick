@@ -5,8 +5,8 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
-const { RunHistory } = require('../run-history');
-const { ProfileStore } = require('../profile-store');
+const { RunHistory } = require('../src/core/run-history');
+const { ProfileStore } = require('../src/core/profile-store');
 
 function backend(t, runSteps, patch = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mouseclik-backend-'));
@@ -19,10 +19,10 @@ function backend(t, runSteps, patch = {}) {
     spawn: (_exe, _args) => { spawnArgs.push(_args); return child; }, execFileSync() {}
   };
   const context = vm.createContext({
-    require: (name) => name === './point-settings' ? require('../point-settings') : name === 'child_process' ? native : name === 'http' ? { createServer: () => ({ listen() {} }) } : name === './run-history' ? { RunHistory } : name === './profile-store' ? require('../profile-store') : require(name),
-    __dirname: path.resolve(__dirname, '..'), process: proc, Buffer, URL, console, setTimeout, clearTimeout
+    require: (name) => name === '../renderer/point-settings' ? require('../src/renderer/point-settings') : name === 'child_process' ? native : name === 'http' ? { createServer: () => ({ listen() {} }) } : name === '../core/run-history' ? { RunHistory } : name === '../core/profile-store' ? require('../src/core/profile-store') : require(name),
+    __dirname: path.resolve(__dirname, '../src/main'), process: proc, Buffer, URL, console, setTimeout, clearTimeout
   });
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/main/server.js'), 'utf8'), context);
   let body;
   context.testResponse = { writeHead() {}, end: (text) => { body = JSON.parse(text); } };
   const payload = runSteps === undefined
