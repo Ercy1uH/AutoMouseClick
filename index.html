@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>点序 · 鼠标连点器</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand-block">
+        <div class="brand-mark"><span></span><span></span><span></span></div>
+        <div>
+          <div class="brand-name">点序</div>
+          <div class="brand-subtitle">MULTI-POINT CLICKER</div>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="section-label">配置栏位 <span class="slot-count" id="slotCount">3 / 8</span></div>
+        <div class="profile-list" id="profileList"></div>
+        <button class="ghost-button add-profile" id="addProfile"><span class="plus">+</span> 新建配置</button>
+      </div>
+
+      <div class="sidebar-bottom">
+        <div class="mini-status"><span class="status-dot" id="sideStatusDot"></span><span id="sideStatusText">就绪，等待开始</span></div>
+        <div class="shortcut-row"><span>运行 / 暂停</span><kbd id="sidebarRunPauseShortcut">Ctrl + F6</kbd></div>
+        <div class="shortcut-row"><span>结束执行</span><kbd id="sidebarStopShortcut">F6</kbd></div>
+        <div class="shortcut-row"><span>强制停止</span><kbd>ESC</kbd></div>
+        <div class="sidebar-footer">v1.4.0 · 本地运行</div>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">ACTIVE PROFILE</div>
+          <h1 id="profileTitle">采集流程 01</h1>
+        </div>
+        <div class="top-actions">
+          <button class="icon-button" title="显示悬浮控制条" id="showFloating"><span>▣</span></button>
+          <button class="icon-button" title="复制当前配置" id="duplicateProfile">⧉</button>
+          <button class="icon-button" title="删除当前配置" id="deleteProfile">⌫</button>
+          <button class="save-button" id="saveProfile"><span>✓</span> 已保存</button>
+        </div>
+      </header>
+
+      <section class="content-grid">
+        <div class="left-column">
+          <section class="panel coordinates-panel">
+            <div class="panel-heading">
+              <div>
+                <div class="eyebrow">STEP 01</div>
+                <h2>点击序列</h2>
+              </div>
+              <div class="sequence-meta"><span class="live-dot"></span><span id="pointCount">4 个坐标点</span></div>
+            </div>
+            <div class="sequence-toolbar">
+              <button class="primary-button" id="pickPoint"><span class="target-icon">⌖</span> 选取屏幕坐标</button>
+              <button class="secondary-button" id="addPoint"><span>＋</span> 手动添加</button>
+              <button class="secondary-button" id="addDelay"><span>＋</span> 添加延迟</button>
+              <button class="toolbar-icon" title="撤销" aria-label="撤销" id="undoPoints">↶</button>
+              <button class="toolbar-icon" title="重做" aria-label="重做" id="redoPoints">↷</button>
+              <button class="toolbar-icon" title="清空全部延迟" id="clearDelays">◷</button>
+              <button class="toolbar-icon" title="清空全部步骤" id="clearPoints">⌫</button>
+            </div>
+            <div class="pick-hint" id="pickHint"><span class="hint-icon">i</span> 点击右侧预览中的任意位置，即可加入序列；拖动列表序号可调整顺序，拖动预览中的圆点可直接修改坐标。</div>
+            <div class="point-list" id="pointList"></div>
+          </section>
+
+          <section class="panel settings-panel">
+            <div class="panel-heading compact">
+              <div><div class="eyebrow">STEP 02</div><h2>执行设置</h2></div>
+              <span class="settings-caption">当前配置独立保存</span>
+            </div>
+            <div class="settings-grid">
+              <label class="field"><span>新点默认按键</span><select id="clickType"><option>左键单击</option><option>中键单击</option><option>右键单击</option><option>双击</option></select></label>
+              <label class="field"><span>循环次数</span><div class="input-suffix"><input id="loopCount" type="number" min="1" value="10" /><em>次</em></div></label>
+              <label class="field"><span>循环间隔</span><div class="input-suffix"><input id="loopInterval" type="number" min="0" value="800" /><em>ms</em></div></label>
+            </div>
+            <div class="toggle-row"><div><strong>按序点击</strong><small>严格按照坐标列表顺序执行</small></div><button class="toggle active" id="orderToggle" aria-label="按序点击"><span></span></button></div>
+            <div class="toggle-row"><div><strong>随机微移</strong><small>在坐标周围轻微偏移，模拟自然操作</small></div><button class="toggle" id="jitterToggle" aria-label="随机微移"><span></span></button></div>
+            <div class="toggle-row"><div><strong>后台悬浮控制条</strong><small>主窗口失焦或最小化时自动显示</small></div><button class="toggle active" id="floatingToggle" aria-label="后台悬浮控制条"><span></span></button></div>
+            <div class="shortcut-settings">
+              <div class="shortcut-setting"><div><strong>运行 / 暂停快捷键</strong><small>全局生效，支持 F1-F12 和组合键</small></div><button class="shortcut-capture" id="runPauseShortcut" type="button">Ctrl + F6</button><button class="shortcut-reset" id="resetRunPauseShortcut" type="button">重新设置</button></div>
+              <div class="shortcut-setting"><div><strong>结束执行快捷键</strong><small>立即停止后台点击 worker</small></div><button class="shortcut-capture" id="stopShortcut" type="button">F6</button><button class="shortcut-reset" id="resetStopShortcut" type="button">重新设置</button></div>
+            </div>
+          </section>
+        </div>
+
+        <div class="right-column">
+          <section class="panel preview-panel">
+            <div class="panel-heading compact">
+              <div><div class="eyebrow">SCREEN PREVIEW</div><h2>屏幕预览</h2></div>
+              <div class="preview-actions">
+                <button class="capture-button" id="captureWindow" title="从 Windows 窗口选择器抓取一个窗口"><span>▣</span> 抓取窗口</button>
+                <div class="monitor-select"><span class="monitor-dot"></span><select id="monitorSelect"><option>显示器 1 · 1920 × 1080</option><option>显示器 2 · 2560 × 1440</option></select></div>
+              </div>
+            </div>
+            <div class="target-window-row">
+              <label for="targetWindow"><span>实际点击目标</span><select id="targetWindow"><option value="">正在读取窗口列表...</option></select></label>
+              <button class="refresh-windows" id="refreshWindows" title="刷新可点击的 Windows 窗口">↻ 刷新</button>
+            </div>
+            <div class="screen-preview" id="screenPreview">
+              <div class="screen-toolbar"><span class="window-dot red"></span><span class="window-dot amber"></span><span class="window-dot green"></span><span class="window-title">工作区预览</span><span class="screen-scale">100%</span></div>
+              <div class="screen-content"><div class="screen-grid"></div><div class="fake-window"><div class="fake-window-head"><span></span><span></span><span></span></div><div class="fake-lines"><i></i><i></i><i></i><i></i></div><div class="fake-card-row"><b></b><b></b><b></b></div></div><video id="captureVideo" class="capture-video" autoplay muted playsinline></video><div class="capture-empty" id="captureEmpty" hidden><span>▣</span><strong>未连接 Windows 窗口</strong><small>点击右上角“抓取窗口”开始预览</small></div><div id="markers"></div></div>
+              <div class="screen-footer"><span id="previewHint">点击预览添加坐标</span><span id="cursorPosition">X 0000　Y 0000</span></div>
+            </div>
+            <div class="preview-legend"><span><i class="legend-dot left"></i>左键</span><span><i class="legend-dot middle"></i>中键</span><span><i class="legend-dot right"></i>右键</span><span><i class="legend-dot double"></i>双击</span><span class="legend-note" id="captureStatus">坐标相对目标窗口左上角</span></div>
+          </section>
+
+          <section class="run-panel">
+            <div class="run-info"><div class="run-state"><span class="state-ring" id="stateRing"></span><div><strong id="runState">准备就绪</strong><small id="runDetail">共 4 个点 · 预计 00:12</small></div></div><div class="run-progress"><span id="progressBar"></span></div></div>
+            <button class="run-button" id="runButton"><span class="play-icon" id="runIcon">▶</span><span id="runLabel">开始运行</span></button>
+          </section>
+          <div class="tip-line"><span>⌁</span> <span id="shortcutTip">运行 / 暂停：Ctrl + F6 · 结束执行：F6 · ESC 强制停止</span></div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <dialog id="pointEditor" class="editor-dialog">
+    <form id="pointForm">
+      <h2 id="pointEditorTitle">添加坐标</h2>
+      <label class="field"><span>标签</span><input id="pointLabel" maxlength="80" required></label>
+      <div class="settings-grid">
+        <label class="field"><span>X</span><input id="pointX" type="number" min="0" max="9999" step="1" required></label>
+        <label class="field"><span>Y</span><input id="pointY" type="number" min="0" max="9999" step="1" required></label>
+      </div>
+      <p class="field-hint">坐标相对目标窗口左上角；连续点击次数和点间隔可在列表中修改。</p>
+      <div class="dialog-actions"><button type="button" id="cancelPoint" class="secondary-button">取消</button><button type="submit" class="primary-button">保存</button></div>
+    </form>
+  </dialog>
+  <dialog id="historyDialog" class="history-dialog">
+    <div class="dialog-heading"><h2>运行历史</h2><button id="refreshHistory" class="secondary-button">刷新</button><button id="closeHistory" class="toolbar-icon" title="关闭" aria-label="关闭">×</button></div>
+    <p id="historyMessage" role="status"></p>
+    <div class="history-table"><table><thead><tr><th>开始时间</th><th>配置 / 窗口</th><th>结果</th><th>进度</th><th>耗时</th><th>错误</th></tr></thead><tbody id="historyRows"></tbody></table></div>
+  </dialog>
+  <div class="toast" id="toast"></div>
+  <script src="point-settings.js?v=20260911-3"></script>
+  <script src="app.js?v=20260911-3"></script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+# 行尾与编码策略
+#
+# 硬约束：PowerShell 脚本必须保持 CRLF + UTF-8 BOM。
+# Windows PowerShell 5.1 在 LF-only 下会误解析 here-string（@'...'@），
+# 报出位置无关的 UnexpectedToken。标记 -text 可禁用 git 的一切行尾/编码转换，
+# 保证在任何平台 clone 后字节完全一致。
+*.ps1 -text
+
+# 其余文本文件统一以 LF 存入仓库并签出
+*.js   text eol=lf
+*.cjs  text eol=lf
+*.json text eol=lf
+*.html text eol=lf
+*.css  text eol=lf
+*.md   text eol=lf
+
+# git 自身配置文件同样固定为 LF（否则系统级 core.autocrlf=true 会反复告警）
+.gitattributes text eol=lf
+.gitignore     text eol=lf
+
+# CMD 批处理脚本需在签出时还原为 CRLF
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# 二进制资源
+*.exe binary
+*.dll binary
+*.png binary
+*.ico binary
+*.woff binary
+*.woff2 binary

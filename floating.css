@@ -1,0 +1,23 @@
+:root { --teal:#10a899; --orange:#e98d4d; --red:#d8615a; --ink:#eefaf7; --muted:#a8c2bd; }
+* { box-sizing:border-box; }
+html,body { width:100%; height:100%; margin:0; overflow:hidden; background:transparent; font:11px "Segoe UI", "Microsoft YaHei", sans-serif; }
+.float-shell { width:220px; height:86px; padding:9px 10px 8px; color:var(--ink); background:rgba(27,43,44,.96); border:1px solid rgba(111,216,198,.62); border-radius:8px; box-shadow:0 8px 22px rgba(0,0,0,.28); }
+.float-drag { height:17px; display:flex; align-items:center; cursor:move; -webkit-app-region:drag; }
+.float-brand { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:800; letter-spacing:.2px; }
+.float-brand span { color:#8ed3c8; font-weight:600; margin-left:3px; }
+.float-hide { width:18px; height:18px; margin-left:auto; padding:0; border:0; border-radius:4px; color:#9bb5b0; background:transparent; cursor:pointer; -webkit-app-region:no-drag; font-size:16px; line-height:16px; }
+.float-hide:hover { color:#fff; background:rgba(255,255,255,.12); }
+.float-meta { display:flex; justify-content:space-between; gap:8px; margin-top:4px; color:var(--muted); font-size:10px; }
+#targetName { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.status { flex:0 0 auto; color:#75d2c2; }
+.progress { height:3px; margin-top:6px; overflow:hidden; border-radius:3px; background:#385454; }
+.progress span { display:block; width:0; height:100%; background:var(--teal); transition:width .2s; }
+.float-actions { display:flex; gap:6px; margin-top:7px; }
+.float-actions button { height:23px; padding:0 8px; border-radius:4px; border:1px solid transparent; color:#fff; font-size:10px; font-weight:700; cursor:pointer; -webkit-app-region:no-drag; }
+.float-start { flex:1; background:var(--teal); border-color:#5cd0c0 !important; }
+.float-start.running { background:var(--orange); border-color:#f3ba8d !important; }
+.float-start.error { background:var(--red); border-color:#efaaa4 !important; }
+.float-start:disabled { opacity:.82; cursor:default; }
+.float-stop { flex:1; background:#405253; border-color:#647b78 !important; }
+.float-stop:hover:not(:disabled) { background:#586968; }
+.float-stop:disabled { opacity:.42; cursor:default; }

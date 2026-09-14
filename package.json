@@ -1,0 +1,45 @@
+{
+  "name": "mouseclik",
+  "version": "1.4.0",
+  "description": "点序 Windows 多点连点器",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "test:ui": "node tests/ui-smoke.cjs && node tests/point-settings-ui.cjs",
+    "start": "electron .",
+    "dist": "electron-builder --win portable"
+  },
+  "build": {
+    "appId": "local.mouseclik.app",
+    "productName": "MouseClik",
+    "asar": false,
+    "files": [
+      "index.html",
+      "floating.html",
+      "floating.css",
+      "floating.js",
+      "style.css",
+      "app.js",
+      "server.js",
+      "run-history.js",
+      "profile-store.js",
+      "point-settings.js",
+      "native-click-worker.ps1",
+      "main.js",
+      "preload.js",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "artifactName": "MouseClik-${version}-portable.exe"
+    }
+  },
+  "devDependencies": {
+    "electron": "^38.1.0",
+    "electron-builder": "^26.0.12",
+    "playwright": "^1.63.0"
+  }
+}

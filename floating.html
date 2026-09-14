@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>点序悬浮控制条</title>
+  <link rel="stylesheet" href="floating.css" />
+</head>
+<body>
+  <section class="float-shell" id="floatShell">
+    <div class="float-drag" id="floatDrag">
+      <div class="float-brand">点序 <span id="profileName">采集流程 01</span></div>
+      <button class="float-hide" id="hideFloat" title="隐藏悬浮控制条">×</button>
+    </div>
+    <div class="float-meta"><span id="targetName">目标：未选择窗口</span><span class="status" id="statusText">准备就绪</span></div>
+    <div class="progress"><span id="progressBar"></span></div>
+    <div class="float-actions">
+      <button class="float-start" id="startButton">▶ 开始执行</button>
+      <button class="float-stop" id="stopButton">■ 结束执行（F6）</button>
+    </div>
+  </section>
+  <script src="floating.js"></script>
+</body>
+</html>
