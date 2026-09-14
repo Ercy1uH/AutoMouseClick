@@ -24,12 +24,58 @@ function formatDuration(seconds) {
   return hours ? `${hours}:${pad(minutes)}:${pad(rest)}` : `${pad(minutes)}:${pad(rest)}`;
 }
 
+// RV-03：端口只有一个权威。Electron 内是 http://127.0.0.1:28232 的同源页面（apiBase 为空），
+// file:// 直开时允许用 ?api=http://127.0.0.1:<port> 指定，默认仅作本地调试用途。
+const apiBase = window.location.protocol === 'file:'
+  ? (new URLSearchParams(window.location.search).get('api') || 'http://127.0.0.1:8000')
+  : '';
+
+// RV-04：localStorage 脏数据（手改、旧版本残留、同源其他页面写入）曾让模块顶层的 JSON.parse
+// 抛未捕获异常 → app.js 整体停止执行 → 界面完全没有交互、且没有任何提示。这里统一兜底。
+function readLocal(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function readJson(key, fallback) {
+  const raw = readLocal(key);
+  if (!raw) return fallback;
+  try { return JSON.parse(raw); } catch {
+    clientDebug('localstorage_corrupt', { key });
+    try { localStorage.removeItem(key); } catch { /* 存储不可用时忽略 */ }
+    return fallback;
+  }
+}
+function readHotkeys() {
+  const fallback = { runPause: 'Control+F6', stop: 'F6' };
+  const stored = readJson('mouseclik.hotkeys', null);
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return fallback;
+  return { runPause: String(stored.runPause || fallback.runPause), stop: String(stored.stop || fallback.stop) };
+}
+
+// RV-02：本地服务对写操作要求凭据，token 由主进程经 preload 下发；浏览器直开时取不到，
+// 写请求会被服务端拒绝（这是有意的——不能再让任何本机网页操纵桌面连点）。
+let serverToken = null;
+const debugQueue = [];
+const authHeaders = (extra = {}) => (serverToken ? { ...extra, 'X-MouseClik-Token': serverToken } : extra);
+function sendDebug(payload) {
+  try { fetch(`${apiBase}/api/debug`, { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(payload) }).catch(() => {}); } catch { /* 诊断失败不能影响主流程 */ }
+}
+async function loadServerToken() {
+  try { serverToken = (await window.mouseclikDesktop?.getServerToken?.()) || null; } catch { serverToken = null; }
+  while (debugQueue.length) sendDebug(debugQueue.shift());
+  return serverToken;
+}
+async function ensureServerToken() {
+  // token 未就绪时先补取，避免"第一次保存 403、第二次才成功"这类时序问题。
+  if (serverToken || !window.mouseclikDesktop?.getServerToken) return serverToken;
+  return loadServerToken();
+}
+
 const state = {
   profiles: [
-    { name: '采集流程 01', note: '4 个坐标点', points: structuredClone(defaultPoints), clickType: '左键单击', loops: 10, pointInterval: 180, loopInterval: 800 },
-    { name: '表单自动填写', note: '6 个坐标点', points: [{x:310,y:280,label:'输入框 01'},{x:600,y:280,label:'输入框 02'},{x:890,y:280,label:'输入框 03'},{x:310,y:510,label:'输入框 04'},{x:600,y:510,label:'输入框 05'},{x:890,y:510,label:'提交按钮'}], clickType:'左键单击', loops:1, pointInterval:240, loopInterval:500 },
-    { name: '每日签到', note: '2 个坐标点', points: [{x:960,y:210,label:'签到入口'},{x:960,y:580,label:'领取奖励'}], clickType:'左键单击', loops:7, pointInterval:320, loopInterval:1200 }
-  ], active: 0, running: false, timer: null, progress: 0, captureStream: null, captureSize: { width: 1920, height: 1080 }, windows: [], nativeRunId: null, pendingRun: null, runStatus: 'idle', runSnapshot: null, statusPollTimer: null, statusPollFailures: 0, floatingAutoShow: localStorage.getItem('mouseclik.floatingAutoShow') !== 'false', hotkeys: JSON.parse(localStorage.getItem('mouseclik.hotkeys') || '{"runPause":"Control+F6","stop":"F6"}'), listeningHotkey: null, persistenceReady: false
+    { name: '采集流程 01', note: '4 个坐标点', points: structuredClone(defaultPoints), clickType: '左键单击', loops: 10, loopInterval: 800 },
+    { name: '表单自动填写', note: '6 个坐标点', points: [{x:310,y:280,label:'输入框 01'},{x:600,y:280,label:'输入框 02'},{x:890,y:280,label:'输入框 03'},{x:310,y:510,label:'输入框 04'},{x:600,y:510,label:'输入框 05'},{x:890,y:510,label:'提交按钮'}], clickType:'左键单击', loops:1, loopInterval:500 },
+    { name: '每日签到', note: '2 个坐标点', points: [{x:960,y:210,label:'签到入口'},{x:960,y:580,label:'领取奖励'}], clickType:'左键单击', loops:7, loopInterval:1200 }
+  ], // RV-20：不再写已废弃的 pointInterval（它会被 normalizeProfilePoints 删除，只会误导读者） active: 0, running: false, timer: null, progress: 0, captureStream: null, captureSize: { width: 1920, height: 1080 }, windows: [], nativeRunId: null, pendingRun: null, runStatus: 'idle', runSnapshot: null, statusPollTimer: null, statusPollFailures: 0, floatingAutoShow: readLocal('mouseclik.floatingAutoShow') !== 'false', hotkeys: readHotkeys(), listeningHotkey: null, persistenceReady: false
 };
 
 const $ = (id) => document.getElementById(id);
@@ -59,8 +105,13 @@ function normalizeProfilePoints(profile) {
   delete profile.points; delete profile.clickType; delete profile.pointInterval;
 }
 
-function updatePoint(point, patch, profile = currentProfile()) {
-  if (!canEditPoints() || profile !== currentProfile() || !profile.steps.includes(point)) return false;
+function updatePoint(target, patch, profile = currentProfile()) {
+  if (!canEditPoints() || profile !== currentProfile()) return false;
+  // RV-15：改用索引定位，不再依赖对象引用身份。normalizeProfilePoints 每次都会把 steps 换成
+  // 新数组，跨渲染残留的引用会让 includes() 为 false —— 编辑会被"静默丢弃"，没有任何提示。
+  const index = Number.isInteger(target) ? target : profile.steps.indexOf(target);
+  const point = profile.steps[index];
+  if (!point) { clientDebug('point_update_missing', { index, patch: Object.keys(patch) }); return false; }
   try {
     const next = { ...point, ...patch };
     PointSettings.requireStepSettings(next, profile.defaultClickType);
@@ -166,7 +217,6 @@ async function loadHistory() {
   } catch (error) { $('historyMessage').textContent = error.message || '历史记录加载失败'; }
   finally { $('refreshHistory').disabled = false; }
 }
-const apiBase = window.location.protocol === 'file:' ? 'http://127.0.0.1:8000' : '';
 const escapeHtml = (value) => String(value).replace(/[&<>\"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[char]));
 
 // --- 配置持久化：启动时从后端恢复，任何修改经 renderAll/saveForm 汇集为一次防抖保存 ---
@@ -191,7 +241,8 @@ async function saveProfiles() {
   profilesSaveTimer = null;
   const snapshot = profilesSnapshot();
   try {
-    const response = await fetch(`${apiBase}/api/profiles`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, keepalive: true, body: snapshot });
+    await ensureServerToken();
+    const response = await fetch(`${apiBase}/api/profiles`, { method: 'PUT', headers: authHeaders({ 'Content-Type': 'application/json' }), keepalive: true, body: snapshot });
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || '配置保存失败');
     lastPersistedProfiles = snapshot;
@@ -205,11 +256,14 @@ async function saveProfiles() {
 window.addEventListener('pagehide', () => { if (profilesSaveTimer) saveProfiles(); });
 
 async function loadProfiles() {
+  let loaded = false;
+  let loadError = '';
   try {
     const response = await fetch(`${apiBase}/api/profiles`, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || '配置加载失败');
-    if (body.error) toast(body.error);
+    loadError = body.error || '';
+    if (Array.isArray(body.profiles) && !loadError) loaded = true;
     if (Array.isArray(body.profiles) && body.profiles.length) {
       state.profiles = body.profiles;
       state.active = Number.isInteger(body.active) ? Math.max(0, Math.min(body.profiles.length - 1, body.active)) : 0;
@@ -217,7 +271,14 @@ async function loadProfiles() {
   } catch (error) { clientDebug('profiles_load_error', { message: error.message }); }
   state.profiles.forEach(normalizeProfilePoints);
   lastPersistedProfiles = profilesSnapshot();
-  state.persistenceReady = true;
+  // RV-06：只有「服务端确实读到了配置」才允许自动保存。读取失败（文件损坏 / schemaVersion
+  // 高于本版本 / 网络失败）时磁盘上还有原文件，此时任何自动保存都会用默认配置覆盖它 —— 必须停手。
+  state.persistenceReady = loaded;
+  if (!loaded) {
+    const reason = loadError ? `原因：${loadError}` : '本轮未能读取到配置';
+    clientDebug('profiles_load_degraded', { error: loadError });
+    setTimeout(() => toast(`配置未能加载，已暂停自动保存（${reason}）。请先处理数据目录中的 profiles.json 后重启应用`), 300);
+  }
   renderAll();
 }
 
@@ -296,7 +357,10 @@ function publishFloatingState() {
 }
 
 function clientDebug(event, details = {}) {
-  fetch(`${apiBase}/api/debug`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ event, details: { page: location.href, origin: location.origin, apiBase, ...details } }) }).catch(() => {});
+  const payload = { event, details: { page: location.href, origin: location.origin, apiBase, ...details } };
+  // /api/debug 也是写操作，需要凭据；token 未取到时先排队，取到后补发，避免丢掉关键诊断。
+  if (!serverToken) { if (debugQueue.length < 20) debugQueue.push(payload); return; }
+  sendDebug(payload);
 }
 
 async function loadWindows(showToast = false) {
@@ -436,26 +500,28 @@ async function pollRunStatus(runId) {
   }
 }
 
-function requestRunControl(action) {
+async function requestRunControl(action) {
   const runId = state.nativeRunId;
-  if (!runId) return Promise.resolve(false);
+  if (!runId) return false;
   if (action === 'stop') {
     state.runStatus = 'stopping';
     renderRunState({ ...(state.runSnapshot || {}), runId, status: 'stopping' });
   }
-  return fetch(`${apiBase}/api/run/${encodeURIComponent(runId)}/control`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action })
-  }).then(async (response) => {
+  try {
+    await ensureServerToken();
+    const response = await fetch(`${apiBase}/api/run/${encodeURIComponent(runId)}/control`, {
+      method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ action })
+    });
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
     if (body.status) applyRunStatus(body);
     return true;
-  }).catch((error) => {
+  } catch (error) {
     clientDebug('run_control_error', { runId, action, message: error.message });
     toast(error.message || '运行控制失败');
     if (action === 'stop') renderRunState(state.runSnapshot || { status: state.runStatus });
     return false;
-  });
+  }
 }
 
 function stopNativeRun() {
@@ -480,17 +546,13 @@ function renderPoints() {
   const clickCount = points.filter((step) => step.type === 'click').length;
   $('pointCount').textContent = `${points.length} 个步骤 · ${clickCount} 个点击`;
   $('pointList').innerHTML = points.length ? points.map((point, index) => point.type === 'delay'
-    ? `<div class="point-row delay-row" draggable="true" data-point="${index}" data-step="${index}"><span class="drag-handle">⠿</span><span class="delay-icon">◷</span><label>等待 <input data-setting="ms" data-index="${index}" type="number" min="0" max="600000" step="1" value="${point.ms}" aria-label="等待时间"> ms</label><span class="point-actions"><button class="point-action point-up" title="上移">↑</button><button class="point-action point-down" title="下移">↓</button><button class="point-action point-remove" title="删除">×</button></span></div>`
-    : `<div class="point-row click-row" draggable="true" data-point="${index}" data-step="${index}"><span class="drag-handle">⠿</span><span class="point-index" style="background:${pointColor(point)}">${String(index + 1).padStart(2,'0')}</span><span><span class="point-label">${escapeHtml(point.label)}</span><span class="point-coord">X ${String(point.x).padStart(4,'0')}　Y ${String(point.y).padStart(4,'0')}</span><span class="click-type-segments">${PointSettings.CLICK_TYPES.map((type) => `<button type="button" data-click-type="${type}" data-index="${index}" class="${point.clickType === type ? 'active' : ''}" title="${type}">${PointSettings.MARKER_NAME[type]}</button>`).join('')}</span></span><span class="click-stepper"><button data-click-delta="-1" data-index="${index}" title="减少连续点击次数">−</button><input data-setting="clickCount" data-index="${index}" type="number" min="1" max="999" step="1" value="${point.clickCount}" aria-label="连续点击次数"><button data-click-delta="1" data-index="${index}" title="增加连续点击次数">+</button></span><span class="point-actions"><button class="point-action point-edit" title="编辑坐标">✎</button><button class="point-action point-up" title="上移">↑</button><button class="point-action point-down" title="下移">↓</button><button class="point-action point-remove" title="删除">×</button></span></div>`).join('') : '<div class="empty-points">还没有步骤</div>';
+    ? `<div class="point-row delay-row" draggable="true" data-point="${index}" data-step="${index}"><span class="drag-handle">⠿</span><span class="delay-icon">◷</span><label>等待 <input data-setting="ms" data-index="${index}" type="number" min="0" max="${PointSettings.MAX_DELAY_MS}" step="1" value="${point.ms}" aria-label="等待时间"> ms</label><span class="point-actions"><button class="point-action point-up" title="上移">↑</button><button class="point-action point-down" title="下移">↓</button><button class="point-action point-remove" title="删除">×</button></span></div>`
+    : `<div class="point-row click-row" draggable="true" data-point="${index}" data-step="${index}"><span class="drag-handle">⠿</span><span class="point-index" style="background:${pointColor(point)}">${String(index + 1).padStart(2,'0')}</span><span><span class="point-label">${escapeHtml(point.label)}</span><span class="point-coord">X ${String(point.x).padStart(4,'0')}　Y ${String(point.y).padStart(4,'0')}</span><span class="click-type-segments">${PointSettings.CLICK_TYPES.map((type) => `<button type="button" data-click-type="${type}" data-index="${index}" class="${point.clickType === type ? 'active' : ''}" title="${type}">${PointSettings.MARKER_NAME[type]}</button>`).join('')}</span></span><span class="click-stepper"><button data-click-delta="-1" data-index="${index}" title="减少连续点击次数">−</button><input data-setting="clickCount" data-index="${index}" type="number" min="1" max="${MAX_POINT_CLICKS}" step="1" value="${point.clickCount}" aria-label="连续点击次数"><button data-click-delta="1" data-index="${index}" title="增加连续点击次数">+</button></span><span class="point-actions"><button class="point-action point-edit" title="编辑坐标">✎</button><button class="point-action point-up" title="上移">↑</button><button class="point-action point-down" title="下移">↓</button><button class="point-action point-remove" title="删除">×</button></span></div>`).join('') : '<div class="empty-points">还没有步骤</div>';
   document.querySelectorAll('.point-remove').forEach((button) => button.addEventListener('click', (event) => { points.splice(Number(event.target.closest('.point-row').dataset.step), 1); PointSettings.applyAutoLabels(points); renderAll(); }));
   document.querySelectorAll('.point-up').forEach((button) => button.addEventListener('click', (event) => movePoint(Number(event.target.closest('.point-row').dataset.step), -1)));
   document.querySelectorAll('.point-down').forEach((button) => button.addEventListener('click', (event) => movePoint(Number(event.target.closest('.point-row').dataset.step), 1)));
   document.querySelectorAll('[data-click-type]').forEach((button) => button.addEventListener('click', () => updatePoint(points[Number(button.dataset.index)], { clickType: button.dataset.clickType })));
   document.querySelectorAll('.point-edit').forEach((button) => button.addEventListener('click', (event) => openPointEditor(Number(event.target.closest('.point-row').dataset.step))));
-  document.querySelectorAll('.point-row').forEach((row) => {
-    const label = row.querySelector('.point-label');
-    if (label) label.textContent = points[Number(row.dataset.step)].label;
-  });
   bindPointSettings(); setupDrag(); renderMarkers(); if (state.runStatus === 'idle') updateRunDetail();
 }
 
@@ -659,7 +721,25 @@ function addPoint(x, y) {
 function addDelay() { if (!canEditPoints()) return; const steps = currentProfile().steps; if (steps.length >= PointSettings.MAX_STEPS) return toast('最多支持 200 个步骤'); steps.push({ type: 'delay', ms: PointSettings.DEFAULT_DELAY_MS }); renderAll(); }
 function updateRunDetail() { const p = currentProfile(); const clickSteps = p.steps.filter((step) => step.type === 'click'); const clicks = sumClicks(p.steps); const waits = p.steps.reduce((sum, step) => sum + (step.type === 'delay' ? step.ms : 0), 0); const repeatWaits = (clicks - clickSteps.length) * 50; const doubleWaits = clickSteps.filter((step) => step.clickType === PointSettings.DOUBLE_CLICK).reduce((sum, step) => sum + step.clickCount * 50, 0); const seconds = (100 + (waits + repeatWaits + doubleWaits) * p.loops + p.loopInterval * Math.max(0, p.loops - 1)) / 1000; const text = `共 ${p.steps.length} 步 · ${clicks * Math.max(1, p.loops)} 次点击 · 预计 ${formatDuration(seconds)}`; $('runDetail').textContent = text; return text; }
 function renderAll() { const p = currentProfile(); normalizeProfilePoints(p); $('profileTitle').textContent = p.name; $('clickType').value = p.defaultClickType; $('loopCount').value = p.loops; $('loopInterval').value = p.loopInterval; renderProfiles(); renderPoints(); publishFloatingState(); scheduleProfilesSave(); }
-function saveForm() { const p = currentProfile(); p.defaultClickType = $('clickType').value; p.loops = Math.max(1, Number($('loopCount').value) || 1); p.loopInterval = Math.max(0, Number($('loopInterval').value) || 0); p.note = `${p.steps.filter((step) => step.type === 'click').length} 个坐标点`; updateRunDetail(); scheduleProfilesSave(); toast('配置已保存'); }
+function saveForm() {
+  const p = currentProfile();
+  p.defaultClickType = $('clickType').value;
+  // RV-07：前端按与服务端同一上限钳制，并把"被修正过"这件事明确告诉用户，避免出现
+  // 「界面按 50 万次估算、实际只跑 10 万次」这种界面与执行结果不一致的情况。
+  const rawLoops = Math.max(1, Number($('loopCount').value) || 1);
+  const rawInterval = Math.max(0, Number($('loopInterval').value) || 0);
+  p.loops = Math.min(PointSettings.MAX_LOOPS, Math.round(rawLoops));
+  p.loopInterval = Math.min(PointSettings.MAX_LOOP_INTERVAL, rawInterval);
+  const clamped = p.loops !== rawLoops || p.loopInterval !== rawInterval;
+  $('loopCount').value = p.loops;
+  $('loopInterval').value = p.loopInterval;
+  // RV-11：note 是持久化字段（将来导入的备注也走它），不能每次保存都改写成自动摘要。
+  if (typeof p.note !== 'string' || !p.note.trim()) p.note = `${p.steps.filter((step) => step.type === 'click').length} 个坐标点`;
+  updateRunDetail();
+  if (!state.persistenceReady) { toast('配置未能加载，已暂停自动保存，请先处理数据文件'); return; }
+  scheduleProfilesSave();
+  toast(clamped ? `超出上限，已调整为 ${p.loops} 次 / ${p.loopInterval} ms` : '配置已保存');
+}
 function stopRun() {
   if (!state.pendingRun && !state.nativeRunId) return resetRunState();
   stopNativeRun();
@@ -694,11 +774,12 @@ async function startRun() {
   state.pendingRun = token;
   renderRunState({ status: 'starting', completed: 0, total: estimatedTotal, pointIndex: -1 });
   try {
+    await ensureServerToken();
     const captureSize = getCaptureSize();
-    const response = await fetch(`${apiBase}/api/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profileName: profile.name, windowId, steps: profile.steps, loops: profile.loops, loopInterval: profile.loopInterval, jitter: $('jitterToggle').classList.contains('active'), captureWidth: captureSize.width, captureHeight: captureSize.height }) });
+    const response = await fetch(`${apiBase}/api/run`, { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ profileName: profile.name, windowId, steps: profile.steps, loops: profile.loops, loopInterval: profile.loopInterval, jitter: $('jitterToggle').classList.contains('active'), captureWidth: captureSize.width, captureHeight: captureSize.height }) });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || '原生点击启动失败');
-    if (state.pendingRun !== token || token.cancelled) { fetch(`${apiBase}/api/stop`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: result.runId }) }).catch(() => {}); return; }
+    if (state.pendingRun !== token || token.cancelled) { fetch(`${apiBase}/api/stop`, { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ runId: result.runId }) }).catch(() => {}); return; }
     state.pendingRun = null;
     state.nativeRunId = result.runId;
     state.runStatus = result.status || 'starting';
@@ -715,7 +796,10 @@ async function startRun() {
   }
 }
 
- $('addPoint').addEventListener('click', () => addPoint()); $('addDelay').addEventListener('click', addDelay); $('pickPoint').addEventListener('click', () => { $('pickHint').innerHTML = '<span class="hint-icon">⌖</span> 选择模式已开启，请点击右侧预览中的位置添加坐标点'; $('screenPreview').classList.add('pick-active'); toast('选择模式已开启'); }); $('clearPoints').addEventListener('click', () => { if (currentProfile().steps.length && confirm('确定清空全部步骤？')) { currentProfile().steps = []; renderAll(); toast('已清空步骤序列'); } }); $('clearDelays').addEventListener('click', () => { const profile = currentProfile(); if (profile.steps.some((step) => step.type === 'delay') && confirm('确定清空全部延迟？')) { profile.steps = profile.steps.filter((step) => step.type !== 'delay'); renderAll(); toast('已清空全部延迟'); } }); $('saveProfile').addEventListener('click', saveForm); $('runButton').addEventListener('click', handleRunButton); $('orderToggle').addEventListener('click', (event) => event.currentTarget.classList.toggle('active')); $('jitterToggle').addEventListener('click', (event) => event.currentTarget.classList.toggle('active')); $('showFloating').addEventListener('click', () => { window.mouseclikDesktop?.toggleFloating(); }); $('floatingToggle').classList.toggle('active', state.floatingAutoShow); $('floatingToggle').addEventListener('click', (event) => { state.floatingAutoShow = event.currentTarget.classList.toggle('active'); localStorage.setItem('mouseclik.floatingAutoShow', String(state.floatingAutoShow)); window.mouseclikDesktop?.setFloatingEnabled(state.floatingAutoShow); toast(state.floatingAutoShow ? '后台悬浮控制条已开启' : '后台悬浮控制条已关闭'); });
+ $('addPoint').addEventListener('click', () => addPoint()); $('addDelay').addEventListener('click', addDelay); $('pickPoint').addEventListener('click', () => { $('pickHint').innerHTML = '<span class="hint-icon">⌖</span> 选择模式已开启，请点击右侧预览中的位置添加坐标点'; $('screenPreview').classList.add('pick-active'); toast('选择模式已开启'); }); $('clearPoints').addEventListener('click', () => { if (currentProfile().steps.length && confirm('确定清空全部步骤？')) { currentProfile().steps = []; renderAll(); toast('已清空步骤序列'); } }); $('clearDelays').addEventListener('click', () => { const profile = currentProfile(); if (profile.steps.some((step) => step.type === 'delay') && confirm('确定清空全部延迟？')) { profile.steps = profile.steps.filter((step) => step.type !== 'delay'); renderAll(); toast('已清空全部延迟'); } }); $('saveProfile').addEventListener('click', saveForm); $('runButton').addEventListener('click', handleRunButton);
+// RV-05：「按序点击」从来没接进执行载荷（server/worker 都不读它），却默认高亮并承诺"严格按顺序
+// 执行"——界面在说谎。在实现 F05 之前先把它禁用并说明，避免用户以为关掉就会随机执行。
+$('orderToggle').addEventListener('click', () => toast('该开关尚未实现，当前始终按序列顺序执行')); $('jitterToggle').addEventListener('click', (event) => event.currentTarget.classList.toggle('active')); $('showFloating').addEventListener('click', () => { window.mouseclikDesktop?.toggleFloating(); }); $('floatingToggle').classList.toggle('active', state.floatingAutoShow); $('floatingToggle').addEventListener('click', (event) => { state.floatingAutoShow = event.currentTarget.classList.toggle('active'); localStorage.setItem('mouseclik.floatingAutoShow', String(state.floatingAutoShow)); window.mouseclikDesktop?.setFloatingEnabled(state.floatingAutoShow); toast(state.floatingAutoShow ? '后台悬浮控制条已开启' : '后台悬浮控制条已关闭'); });
 $('runPauseShortcut').addEventListener('click', () => captureHotkey('runPause'));
 $('stopShortcut').addEventListener('click', () => captureHotkey('stop'));
 $('resetRunPauseShortcut').addEventListener('click', () => captureHotkey('runPause'));
@@ -729,6 +813,7 @@ $('refreshWindows').addEventListener('click', () => loadWindows(true));
      window.mouseclikDesktop.onHotkey((action) => {
        if (action === 'toggle') toggleRunFromHotkey();
        if (action === 'stop' && (state.pendingRun || state.nativeRunId)) stopRun();
+       if (action === 'pause' && state.runStatus === 'running') requestRunControl('pause');
      });
   window.mouseclikDesktop.onHotkeyStatus((status) => {
        if (status?.config) { state.hotkeys = status.config; renderHotkeySettings(); }
@@ -738,6 +823,7 @@ $('refreshWindows').addEventListener('click', () => loadWindows(true));
    if (window.mouseclikDesktop?.onFloatingAction) {
      window.mouseclikDesktop.onFloatingAction((action) => {
        clientDebug('floating_action', { action, status: state.runStatus, hasPendingRun: Boolean(state.pendingRun), runId: state.nativeRunId });
+       if (action === 'pause' && state.runStatus === 'running') requestRunControl('pause');
        if (action === 'start') {
          if (state.runStatus === 'paused') requestRunControl('resume');
          else if (!state.pendingRun && !state.nativeRunId) startRun();
@@ -790,6 +876,10 @@ for (const id of ['pointList', 'clearPoints']) $(id).addEventListener('click', (
 }, true);
 $('pointList').addEventListener('dragstart', (event) => { if (!canEditPoints()) { event.preventDefault(); event.stopImmediatePropagation(); } }, true);
 $('pointList').addEventListener('drop', (event) => { if (!canEditPoints()) { event.preventDefault(); event.stopImmediatePropagation(); } }, true);
+// RV-07 / RV-08：上限统一由 point-settings.js 注入 DOM，HTML 里不再各自复制一份常量。
+$('loopCount').min = '1'; $('loopCount').max = String(PointSettings.MAX_LOOPS);
+$('loopInterval').min = '0'; $('loopInterval').max = String(PointSettings.MAX_LOOP_INTERVAL);
+loadServerToken();
 setupHotkeys();
 renderAll();
 loadProfiles();

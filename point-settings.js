@@ -3,7 +3,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PointSettings = api;
 })(typeof globalThis === 'object' ? globalThis : this, function () {
-  const MAX_POINT_CLICKS = 999, MAX_DELAY_MS = 600000, MAX_STEPS = 200, MAX_CLICK_STEPS = 100;
+  const MAX_POINT_CLICKS = 999, MAX_DELAY_MS = 600000, MAX_STEPS = 200, MAX_CLICK_STEPS = 100, MAX_LOOPS = 100000, MAX_LOOP_INTERVAL = 60000;
   const DEFAULT_DELAY_MS = 180, DEFAULT_CLICK_TYPE = '左键单击';
   const CLICK_TYPES = ['左键单击', '中键单击', '右键单击', '双击'];
   const DOUBLE_CLICK = '双击';
@@ -40,5 +40,5 @@
     points.forEach((point, index) => { steps.push({ ...point, type: 'click' }); const wait = Number(point?.intervalAfterMs); if (index < points.length - 1 && Number.isFinite(wait) && wait > 0) steps.push({ type: 'delay', ms: wait }); });
     return steps;
   }
-  return { integer, legacyInterval, clickType, requireStepSettings, sanitizeStepSettings, resolveLabelAuto, applyAutoLabels, clickOrdinals, pointsToSteps, MAX_POINT_CLICKS, MAX_DELAY_MS, MAX_STEPS, MAX_CLICK_STEPS, DEFAULT_DELAY_MS, DEFAULT_CLICK_TYPE, CLICK_TYPES, DOUBLE_CLICK, SHORT_NAME, MARKER_NAME, CLICK_ACTION, BUTTON_COLORS, AUTO_LABEL_PATTERN };
+  return { integer, legacyInterval, clickType, requireStepSettings, sanitizeStepSettings, resolveLabelAuto, applyAutoLabels, clickOrdinals, pointsToSteps, MAX_POINT_CLICKS, MAX_DELAY_MS, MAX_STEPS, MAX_CLICK_STEPS, MAX_LOOPS, MAX_LOOP_INTERVAL, DEFAULT_DELAY_MS, DEFAULT_CLICK_TYPE, CLICK_TYPES, DOUBLE_CLICK, SHORT_NAME, MARKER_NAME, CLICK_ACTION, BUTTON_COLORS, AUTO_LABEL_PATTERN };
 });

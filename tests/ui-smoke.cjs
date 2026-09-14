@@ -2,10 +2,16 @@ const { chromium } = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 
+// RV-02：本地服务对写操作要求凭据。真实运行时 token 由主进程经 preload 下发，
+// 这里的浏览器环境没有 preload，所以显式注入一个同名桩。
+const TOKEN = 'feature-check';
+const authStub = `window.mouseclikDesktop = { getServerToken: async () => '${TOKEN}' };`;
+
 (async () => {
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    await page.addInitScript(authStub);
     const errors = [];
     page.on('pageerror', (error) => errors.push(error.message));
     page.on('dialog', (dialog) => dialog.accept());
@@ -102,14 +108,16 @@ const fs = require('node:fs');
     const addedPoint = profilePuts.at(-1).profiles[0].steps.find((point) => point.label === '<img src=x onerror=alert(1)>');
     assert.equal(addedPoint.clickCount, 7, 'clickCount must be persisted through PUT payloads');
     assert.deepEqual(errors, []);
-    const health = await (await page.request.get('http://127.0.0.1:28332/api/health')).json();
-    assert.equal(health.token, 'feature-check');
+    const health = await (await page.request.get('http://127.0.0.1:28332/api/health', { headers: { 'X-MouseClik-Token': TOKEN } })).json();
+    assert.equal(health.authorized, true);
+    assert.equal(health.token, undefined, 'health must not echo the token');
     await page.locator('#cancelPoint').click();
     await page.close();
 
     const api = await browser.newContext();
-    await api.request.put('http://127.0.0.1:28332/api/profiles', { data: { profiles: [], active: 0 } });
+    await api.request.put('http://127.0.0.1:28332/api/profiles', { headers: { 'X-MouseClik-Token': TOKEN }, data: { profiles: [], active: 0 } });
     const persistencePage = await browser.newPage();
+    await persistencePage.addInitScript(authStub);
     await persistencePage.route('**/api/windows', (route) => route.fulfill({ json: [] }));
     await persistencePage.goto('http://127.0.0.1:28332');
     await persistencePage.locator('#addProfile').click();

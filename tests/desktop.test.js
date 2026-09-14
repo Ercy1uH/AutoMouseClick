@@ -26,15 +26,18 @@ function desktopContext(fetch, options = {}) {
 }
 
 test('startup rejects another service and accepts only this launch token and version', async () => {
-  let requests = 0, token;
-  const { context } = desktopContext(async (url) => {
+  let requests = 0;
+  const { context } = desktopContext(async (url, init) => {
     assert.match(url, /\/api\/health$/);
-    return { ok: true, json: async () => ({ app: 'mouseclik', version: '1.0.5', token: ++requests === 1 ? 'foreign' : token }) };
+    // RV-02：自检改为「带上本次启动的 token，由服务端比对后回 authorized」，
+    // /api/health 不再把 token 明文回显给任何调用者。
+    assert.ok(init?.headers?.['X-MouseClik-Token'], 'the health probe must present the launch token');
+    requests += 1;
+    return { ok: true, json: async () => ({ app: 'mouseclik', version: '1.0.5', authorized: requests > 1 }) };
   });
-  token = vm.runInContext('serverToken', context);
   assert.equal(await vm.runInContext('waitForServer()', context), true);
   assert.equal(requests, 2);
-  const foreign = desktopContext(async () => ({ ok: true, json: async () => ({ app: 'mouseclik', token: 'foreign', version: '1.0.5' }) }));
+  const foreign = desktopContext(async () => ({ ok: true, json: async () => ({ app: 'mouseclik', version: '1.0.5', authorized: false }) }));
   assert.equal(await vm.runInContext('waitForServer()', foreign.context), false);
 });
 

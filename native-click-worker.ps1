@@ -5,6 +5,15 @@ $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 try {
   $payload = $PayloadJson | ConvertFrom-Json -ErrorAction Stop
 } catch {
+  # RV-14：其它失败路径都会先 Emit-Event 带明确 code，这里过去只 exit 11，前端只能看到
+  # “worker 异常退出（代码 11）”，没有字段也没有原因。注意此处 Emit-Event / $runId 尚未定义
+  # （脚本按顺序执行），因此直接写一行 JSON。
+  try {
+    [Console]::Out.WriteLine((@{ type = 'error'; code = 'WORKER_PAYLOAD_INVALID'; message = $_.Exception.Message } | ConvertTo-Json -Compress))
+    [Console]::Out.Flush()
+  } catch {
+    # 报告失败不能掩盖真正的解析失败
+  }
   exit 11
 }
 
@@ -70,6 +79,8 @@ $loopInterval = [Math]::Max(0, [int]$payload.loopInterval)
 $captureWidth = [Math]::Max(1, [int]$payload.captureWidth)
 $captureHeight = [Math]::Max(1, [int]$payload.captureHeight)
 $jitter = [bool]$payload.jitter
+# RV-08：单击次数上限由 server.js 单一下发（point-settings.js 是唯一权威），不再在这里复制常量。
+$script:maxPointClicks = [int]$payload.maxPointClicks
 $controlPath = [string]$payload.controlPath
 $random = [Random]::new()
 $script:isPaused = $false
@@ -81,7 +92,9 @@ function Get-PointClickCount {
   $clicks = 0
   if (-not [int]::TryParse([string]$Step.clickCount, [ref]$clicks)) { $clicks = 1 }
   if ($clicks -lt 1) { $clicks = 1 }
-  if ($clicks -gt 999) { $clicks = 999 }
+  # RV-08：上限来自载荷；单独跑/单测未下发时回落到 999，保证函数可独立测试。
+  $limit = if ($script:maxPointClicks -gt 0) { [int]$script:maxPointClicks } else { 999 }
+  if ($clicks -gt $limit) { $clicks = $limit }
   return $clicks
 }
 

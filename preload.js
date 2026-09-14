@@ -1,6 +1,8 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('mouseclikDesktop', {
+  // RV-02：本地服务的写操作需要凭据，token 只在主进程与渲染进程之间传递。
+  getServerToken: () => ipcRenderer.invoke('server:auth').catch(() => null),
   setCaptureWindow: (windowHandle, windowTitle) => ipcRenderer.invoke('capture:set-window', {
     windowHandle: String(windowHandle || ''),
     windowTitle: String(windowTitle || '')

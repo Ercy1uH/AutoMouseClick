@@ -68,3 +68,5 @@ dialog h2 { font-size:18px; margin:0 0 20px; }
 .point-interval input { width:80px; height:28px; text-align:center; border:1px solid #cfddd8; border-radius:4px; color:#39584f; background:#f8fbfa; }
 .point-list input:focus { outline:2px solid #66b7a8; outline-offset:1px; }
 @media (max-width:1200px) { .point-list .point-row { grid-template-columns:14px 23px minmax(0,1fr) 100px; }.point-list .point-actions { grid-column:3 / 5; justify-self:end; } }
+/* RV-05：未实现的开关要一眼看出不可用，不能只是"点了没反应" */
+.toggle:disabled { opacity:.4; cursor:not-allowed; }

@@ -1,10 +1,12 @@
 const http = require('http');
 const fs = require('fs');
-const { requireStepSettings, pointsToSteps, clickType, integer, MAX_STEPS, MAX_CLICK_STEPS, DEFAULT_CLICK_TYPE } = require('./point-settings');
+const { requireStepSettings, pointsToSteps, clickType, integer, MAX_STEPS, MAX_CLICK_STEPS, MAX_LOOPS, MAX_LOOP_INTERVAL, DEFAULT_CLICK_TYPE } = require('./point-settings');
 const path = require('path');
 const { execFile, execFileSync, spawn } = require('child_process');
 const { randomUUID } = require('crypto');
 const { RunHistory } = require('./run-history');
+let createDebugLog;
+try { ({ createDebugLog } = require('./debug-log')); } catch { /* VM tests may omit the helper module. */ }
 const { ProfileStore, totalClicks, MAX_POINT_CLICKS } = require('./profile-store');
 const dataDir = process.env.MOUSECLIK_DATA || __dirname;
 const history = new RunHistory(path.join(dataDir, 'run-history.json'));
@@ -12,6 +14,20 @@ const profileStore = new ProfileStore(path.join(dataDir, 'profiles.json'));
 
 const root = __dirname;
 const port = Number(process.env.PORT || 8000);
+// 端口只有一个权威（RV-03）：CORS 兜底与前端回退都从这里派生，不再硬编码 8000。
+const serverOrigin = `http://127.0.0.1:${port}`;
+// RV-02：写操作必须携带本次启动下发的 token。没有 token 的部署（直接 `node server.js`）
+// 默认拒绝一切写请求，只有在显式打开开发开关时才放行。
+const serverToken = process.env.MOUSECLIK_SERVER_TOKEN || null;
+const allowInsecureWrites = process.env.MOUSECLIK_ALLOW_INSECURE_WRITES === '1';
+// file:// 直开（浏览器 origin 为字面量 "null"）默认不再被信任，需要显式开关（RV-02）。
+const allowFileOrigin = process.env.MOUSECLIK_ALLOW_FILE_ORIGIN === '1';
+const HOST_PATTERN = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i;
+const LOCAL_ORIGIN_PATTERN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
+const MAX_BODY_BYTES = 1_000_000;
+// RV-01：只有界面真正加载的这几个文件可以被 HTTP 回源（与 package.json 的 files 列表一致）。
+// 目录穿越已在下面用带分隔符的前缀判断挡住，这里是第二道：源码与配置不会被下载。
+const STATIC_ALLOWLIST = new Set(['/index.html', '/floating.html', '/style.css', '/floating.css', '/app.js', '/floating.js', '/point-settings.js']);
 const workerPath = path.join(root, 'native-click-worker.ps1');
 const debugDir = process.env.MOUSECLIK_DATA ? path.join(process.env.MOUSECLIK_DATA, 'debug') : path.join(root, 'debug');
 const legacyDebugPath = process.env.MOUSECLIK_DATA ? path.join(process.env.MOUSECLIK_DATA, 'debug.log') : path.join(root, 'debug.log');
@@ -28,7 +44,8 @@ const WORKER_ERROR_MESSAGES = {
   TARGET_WINDOW_UNAVAILABLE: '无法激活目标窗口',
   NATIVE_INPUT_FAILED: '无法移动鼠标到目标坐标',
   WORKER_EXCEPTION: '点击 worker 执行失败',
-  WORKER_START_FAILED: '点击 worker 启动失败'
+  WORKER_START_FAILED: '点击 worker 启动失败',
+  WORKER_PAYLOAD_INVALID: '点击 worker 载荷解析失败'
 };
 
 fs.mkdirSync(debugDir, { recursive: true });
@@ -42,23 +59,14 @@ if (fs.existsSync(legacyDebugPath)) {
     fs.unlinkSync(legacyDebugPath);
   } catch { /* keep the legacy file if migration is interrupted */ }
 }
-const existingDebugFiles = fs.readdirSync(debugDir).filter((name) => /^debug-\d+\.log$/.test(name)).sort((a, b) => Number(a.slice(6, -4)) - Number(b.slice(6, -4)));
-const nextDebugIndex = existingDebugFiles.length ? Number(existingDebugFiles[existingDebugFiles.length - 1].slice(6, -4)) + 1 : 1;
-const activeDebugPath = path.join(debugDir, `debug-${String(nextDebugIndex).padStart(3, '0')}.log`);
+const debugLog = createDebugLog ? ((log) => (event, details = {}) => {
+  debugWriteQueue = log(event, details);
+  return debugWriteQueue;
+})(createDebugLog(debugDir)) : (event, details = {}) => {
+  debugWriteQueue = debugWriteQueue.then(() => fs.promises.appendFile(path.join(debugDir, 'debug-001.log'), `${JSON.stringify({ time: new Date().toISOString(), event, ...details })}\n`)).catch(() => {});
+  return debugWriteQueue;
+};
 if (profileStore.error) debugLog('profiles.load_error', { message: profileStore.error });
-
-function debugLog(event, details = {}) {
-  const line = JSON.stringify({ time: new Date().toISOString(), event, ...details }) + '\n';
-  debugWriteQueue = debugWriteQueue.then(async () => {
-    await fs.promises.appendFile(activeDebugPath, line);
-    let files = fs.readdirSync(debugDir).filter((name) => /^debug-\d+\.log$/.test(name)).sort((a, b) => Number(a.slice(6, -4)) - Number(b.slice(6, -4)));
-    files = fs.readdirSync(debugDir).filter((name) => /^debug-\d+\.log$/.test(name)).sort((a, b) => Number(a.slice(6, -4)) - Number(b.slice(6, -4)));
-    while (files.length > 10) {
-      const oldest = files.shift();
-      try { await fs.promises.unlink(path.join(debugDir, oldest)); } catch { /* keep going if an old file is locked */ }
-    }
-  }).catch(() => {});
-}
 
 function publicRun(run) {
   return {
@@ -264,9 +272,21 @@ try { if (-not [WindowApi]::SetProcessDpiAwarenessContext([IntPtr]::new(-4))) { 
 `;
 
 function send(res, status, data, type = 'application/json; charset=utf-8') {
-  res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': res.__corsOrigin || 'http://127.0.0.1:8000' });
+  res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': res.__corsOrigin || serverOrigin });
   if (status === 204) return res.end();
   res.end(type.startsWith('application/json') ? JSON.stringify(data) : data);
+}
+
+// RV-02：写操作的唯一授权判断。token 由 main.js 在启动 server 时通过环境变量下发，
+// 并经由 preload 只交给本应用的渲染进程；任何第三方页面都拿不到它。
+function authorized(req) {
+  if (!serverToken) return allowInsecureWrites;
+  return String(req.headers['x-mouseclik-token'] || '') === serverToken;
+}
+
+// RV-02：Host 校验拦掉 DNS rebinding（攻击域名解析到 127.0.0.1 时 Host 头仍是攻击域名）。
+function hostAllowed(req) {
+  return HOST_PATTERN.test(String(req.headers.host || ''));
 }
 
 function findWindow(windowId, callback) {
@@ -283,14 +303,25 @@ function findWindow(windowId, callback) {
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let body = '';
+    let settled = false;
     req.on('data', (chunk) => {
+      if (settled) return;
       body += chunk;
-      if (body.length > 1_000_000) req.destroy(new Error('Request body too large'));
+      // RV-09：只 destroy() 不会触发 'error'，await 会永久挂起；这里先 reject 再排空，
+      // 让上层能正常回 400，连接不会悬挂。
+      if (body.length > MAX_BODY_BYTES) {
+        settled = true;
+        body = '';
+        reject(new Error('请求体过大'));
+        req.resume();
+      }
     });
     req.on('end', () => {
+      if (settled) return;
+      settled = true;
       try { resolve(body ? JSON.parse(body) : {}); } catch { reject(new Error('Invalid JSON')); }
     });
-    req.on('error', reject);
+    req.on('error', (error) => { if (settled) return; settled = true; reject(error); });
   });
 }
 
@@ -316,8 +347,8 @@ function listWindows(res) {
 function startNativeRun(res, payload) {
   const fallbackClickType = clickType(payload.defaultClickType ?? payload.clickType, DEFAULT_CLICK_TYPE);
   const sourceSteps = Array.isArray(payload.steps) ? payload.steps : pointsToSteps(payload.points).map((step) => step.type === 'click' ? { ...step, clickType: fallbackClickType } : step);
-  const loops = Math.max(1, Math.min(100000, Math.round(Number(payload.loops) || 1)));
-  const loopInterval = Math.max(0, Math.min(60000, Number(payload.loopInterval) || 0));
+  const loops = Math.max(1, Math.min(MAX_LOOPS, Math.round(Number(payload.loops) || 1)));
+  const loopInterval = Math.max(0, Math.min(MAX_LOOP_INTERVAL, Number(payload.loopInterval) || 0));
   const windowId = String(payload.windowId || '');
   if (startingRun || (activeRunId && !isTerminal(runs.get(activeRunId)))) return send(res, 409, { error: '已有运行任务，请先停止当前任务' });
   if (!/^\d+$/.test(windowId) || !sourceSteps.some((step) => step?.type !== 'delay')) return send(res, 400, { error: '目标窗口或点击步骤无效' });
@@ -375,6 +406,8 @@ function startNativeRun(res, payload) {
       loopInterval,
       captureWidth: Math.max(1, Math.min(10000, Number(payload.captureWidth) || 1920)),
       captureHeight: Math.max(1, Math.min(10000, Number(payload.captureHeight) || 1080)),
+      // RV-08：单击上限由 point-settings.js 单一下发，worker 不再自带 999 副本。
+      maxPointClicks: MAX_POINT_CLICKS,
       jitter: Boolean(payload.jitter),
       controlPath
     });
@@ -433,8 +466,27 @@ async function handle(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
   const origin = String(req.headers.origin || '');
   res.__requestOrigin = origin;
+  // RV-03：CORS 必须在任何路由分派之前算好。过去 /api/health 与 /api/history 在 CORS 赋值前
+  // 就 return 了，send() 只能落到硬编码旧端口的兜底值 —— 换个端口就只有这两个功能被浏览器拦下。
+  // RV-02：file:// 直开（origin 为字面量 "null"）不再默认信任，需要显式开关。
+  res.__corsOrigin = origin === 'null'
+    ? (allowFileOrigin ? 'null' : serverOrigin)
+    : LOCAL_ORIGIN_PATTERN.test(origin) ? origin : serverOrigin;
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, { 'Access-Control-Allow-Origin': res.__corsOrigin, 'Access-Control-Allow-Methods': 'GET,POST,PUT,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, X-MouseClik-Token' });
+    return res.end();
+  }
+  // RV-02：不信任调用方。先验 Host（挡住 DNS rebinding），再验写权限（挡住本机网页的简单请求）。
+  if (!hostAllowed(req)) {
+    debugLog('request.bad_host', { host: String(req.headers.host || ''), url: url.pathname });
+    return send(res, 403, { error: 'Forbidden' });
+  }
+  if (req.method !== 'GET' && !authorized(req)) {
+    debugLog('request.unauthorized', { method: req.method, url: url.pathname, origin });
+    return send(res, 403, { error: '未授权的本机请求：缺少有效的访问凭据' });
+  }
   if (req.method === 'GET' && url.pathname === '/api/health') return send(res, 200, {
-    app: 'mouseclik', version: require('./package.json').version, token: process.env.MOUSECLIK_SERVER_TOKEN || null
+    app: 'mouseclik', version: require('./package.json').version, authorized: authorized(req)
   });
   if (req.method === 'GET' && url.pathname === '/api/history') return send(res, 200, {
     entries: history.entries.map((entry) => {
@@ -442,9 +494,6 @@ async function handle(req, res) {
       return run ? { ...entry, ...publicRun(run) } : entry;
     }), error: history.error
   });
-  // The app can also be opened directly from index.html, whose browser origin is the literal "null".
-  res.__corsOrigin = origin === 'null' || /^(https?:\/\/)(localhost|127\.0\.0\.1)(:\d+)$/.test(origin) ? origin || 'null' : 'http://127.0.0.1:8000';
-  if (req.method === 'OPTIONS') { res.writeHead(204, { 'Access-Control-Allow-Origin': res.__corsOrigin, 'Access-Control-Allow-Methods': 'GET,POST,PUT,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' }); return res.end(); }
   if (req.method === 'POST' && url.pathname === '/api/debug') {
     try {
       const body = await readBody(req);
@@ -486,12 +535,19 @@ async function handle(req, res) {
     } catch (error) { return send(res, 400, { error: error.message }); }
   }
   if (req.method !== 'GET') return send(res, 405, { error: 'Method not allowed' });
-  const requested = decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname);
+  let requested;
+  try { requested = decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname); } catch { return send(res, 400, { error: 'Bad request' }); }
   const filePath = path.resolve(root, `.${requested}`);
-  if (!filePath.startsWith(root) || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return send(res, 404, { error: 'Not found' });
-  const ext = path.extname(filePath).toLowerCase();
+  // RV-01：包含判断必须带路径分隔符 —— 缺分隔符时 D:\MouseClick-evil\ 这种**同级兄弟目录**
+  // 会通过 startsWith 检查。同时只回源界面自己用到的这几个文件，源码（server.js /
+  // profile-store.js / package.json / native-click-worker.ps1）不再能被 HTTP 下载。
+  const rootPrefix = root.endsWith(path.sep) ? root : root + path.sep;
+  if (filePath !== root && !filePath.startsWith(rootPrefix)) return send(res, 404, { error: 'Not found' });
   const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
-  res.writeHead(200, { 'Content-Type': types[ext] || 'application/octet-stream' });
+  const ext = path.extname(filePath).toLowerCase();
+  if (!STATIC_ALLOWLIST.has(requested) || !Object.prototype.hasOwnProperty.call(types, ext)) return send(res, 404, { error: 'Not found' });
+  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return send(res, 404, { error: 'Not found' });
+  res.writeHead(200, { 'Content-Type': types[ext] });
   fs.createReadStream(filePath).pipe(res);
 }
 

@@ -21,12 +21,12 @@ function render(run = state.run) {
   $('progressBar').style.width = `${Math.max(0, Math.min(100, Number(state.run.progress) || 0))}%`;
   $('startButton').classList.toggle('running', active);
   $('startButton').classList.toggle('error', status === 'error');
-  $('startButton').textContent = status === 'running' ? 'Ⅱ 运行中' : status === 'paused' ? '▶ 继续执行' : '▶ 开始执行';
-  $('startButton').disabled = status === 'starting' || status === 'stopping' || status === 'running';
+  $('startButton').textContent = status === 'running' ? 'Ⅱ 暂停' : status === 'paused' ? '▶ 继续执行' : '▶ 开始执行';
+  $('startButton').disabled = status === 'starting' || status === 'stopping';
   $('stopButton').disabled = !active;
 }
 
-$('startButton').addEventListener('click', () => window.mouseclikDesktop?.floatingAction('start'));
+$('startButton').addEventListener('click', () => window.mouseclikDesktop?.floatingAction(state.run.status === 'running' ? 'pause' : 'start'));
 $('stopButton').addEventListener('click', () => window.mouseclikDesktop?.floatingAction('stop'));
 $('hideFloat').addEventListener('click', () => window.mouseclikDesktop?.toggleFloating());
 window.mouseclikDesktop?.onFloatingState(render);

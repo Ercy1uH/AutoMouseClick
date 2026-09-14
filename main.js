@@ -198,10 +198,15 @@ async function waitForServer() {
   const deadline = Date.now() + 8000;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`http://127.0.0.1:${SERVER_PORT}/api/health`, { signal: AbortSignal.timeout(700) });
+      // RV-02：/api/health 不再把 token 明文回显给任何调用者，改为「谁带对 token 谁才拿到
+      // authorized: true」。这样既保留"端口上是不是我自己那个服务"的自检，也不再泄漏凭据。
+      const response = await fetch(`http://127.0.0.1:${SERVER_PORT}/api/health`, {
+        signal: AbortSignal.timeout(700),
+        headers: { 'X-MouseClik-Token': serverToken }
+      });
       if (response.ok) {
         const health = await response.json();
-        if (health.app === 'mouseclik' && health.token === serverToken && health.version === app.getVersion()) return true;
+        if (health.app === 'mouseclik' && health.authorized === true && health.version === app.getVersion()) return true;
       }
     } catch { /* server is still starting */ }
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -329,6 +334,10 @@ function refreshTray() {
     { label: '退出 MouseClik', click: () => app.quit() }
   ]));
 }
+
+// RV-02：渲染进程通过这里拿到本次启动的 token，用于给本地服务的写请求带凭据。
+// 只有本应用页面能走到 IPC，第三方网页拿不到这个值。
+ipcMain.handle('server:auth', () => serverToken);
 
 ipcMain.handle('capture:set-window', (_event, target) => {
   const windowHandle = String(target?.windowHandle || '');

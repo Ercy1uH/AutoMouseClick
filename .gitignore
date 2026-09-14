@@ -9,7 +9,6 @@ User/
 .runtime-profile/
 
 # Internal documentation - kept local, not published
-# docs/ contains the security review (unfixed P0 issues) and the internal backlog
 docs/
 
 # Logs and local runtime artifacts
@@ -18,6 +17,25 @@ docs/
 *.tmp
 debug/
 coverage/
+github-upload/
+*.zip
+*.7z
+*.bak
+*.backup
+
+# User profiles, history, databases and browser state
+profiles.json
+profiles.*.json
+run-history.json
+run-history.*.json
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+*.dmp
+playwright-report/
+test-results/
 
 # Secrets and machine-specific configuration
 .env
@@ -27,6 +45,22 @@ coverage/
 *.key
 *.p12
 *.pfx
+.npmrc
+.netrc
+_netrc
+.aws/
+.ssh/
+.azure/
+.config/
+.codex/
+.agents/
+secrets/
+credentials/
+credentials.json
+secrets.json
+*service-account*.json
+id_rsa*
+id_ed25519*
 
 # OS/editor files
 .DS_Store

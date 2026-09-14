@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>点序 · 鼠标连点器</title>
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style.css?v=20260914-1" />
 </head>
 <body>
   <div class="app-shell">
@@ -28,7 +28,7 @@
         <div class="shortcut-row"><span>运行 / 暂停</span><kbd id="sidebarRunPauseShortcut">Ctrl + F6</kbd></div>
         <div class="shortcut-row"><span>结束执行</span><kbd id="sidebarStopShortcut">F6</kbd></div>
         <div class="shortcut-row"><span>强制停止</span><kbd>ESC</kbd></div>
-        <div class="sidebar-footer">v1.4.0 · 本地运行</div>
+        <div class="sidebar-footer">v1.4.1 · 本地运行</div>
       </div>
     </aside>
 
@@ -79,7 +79,7 @@
               <label class="field"><span>循环次数</span><div class="input-suffix"><input id="loopCount" type="number" min="1" value="10" /><em>次</em></div></label>
               <label class="field"><span>循环间隔</span><div class="input-suffix"><input id="loopInterval" type="number" min="0" value="800" /><em>ms</em></div></label>
             </div>
-            <div class="toggle-row"><div><strong>按序点击</strong><small>严格按照坐标列表顺序执行</small></div><button class="toggle active" id="orderToggle" aria-label="按序点击"><span></span></button></div>
+            <div class="toggle-row"><div><strong>按序点击</strong><small>当前固定按序列顺序执行（随机顺序开发中）</small></div><button class="toggle" id="orderToggle" aria-label="按序点击（开发中）" title="该开关尚未实现：无论开关状态如何，执行始终按坐标序列顺序进行" disabled><span></span></button></div>
             <div class="toggle-row"><div><strong>随机微移</strong><small>在坐标周围轻微偏移，模拟自然操作</small></div><button class="toggle" id="jitterToggle" aria-label="随机微移"><span></span></button></div>
             <div class="toggle-row"><div><strong>后台悬浮控制条</strong><small>主窗口失焦或最小化时自动显示</small></div><button class="toggle active" id="floatingToggle" aria-label="后台悬浮控制条"><span></span></button></div>
             <div class="shortcut-settings">
@@ -137,7 +137,7 @@
     <div class="history-table"><table><thead><tr><th>开始时间</th><th>配置 / 窗口</th><th>结果</th><th>进度</th><th>耗时</th><th>错误</th></tr></thead><tbody id="historyRows"></tbody></table></div>
   </dialog>
   <div class="toast" id="toast"></div>
-  <script src="point-settings.js?v=20260911-3"></script>
-  <script src="app.js?v=20260911-3"></script>
+  <script src="point-settings.js?v=20260914-1"></script>
+  <script src="app.js?v=20260914-1"></script>
 </body>
 </html>
