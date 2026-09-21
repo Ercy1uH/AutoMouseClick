@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>点序 · 鼠标连点器</title>
-  <link rel="stylesheet" href="style.css?v=20260914-1" />
+  <link rel="stylesheet" href="style.css?v=20260921-5" />
 </head>
 <body>
   <div class="app-shell">
@@ -36,7 +36,7 @@
       <header class="topbar">
         <div>
           <div class="eyebrow">ACTIVE PROFILE</div>
-          <h1 id="profileTitle">采集流程 01</h1>
+          <div class="profile-heading"><h1 id="profileTitle">采集流程 01</h1><button type="button" class="icon-button" id="renameProfile" title="重命名当前配置" aria-label="重命名当前配置">✎</button></div>
         </div>
         <div class="top-actions">
           <button class="icon-button" title="显示悬浮控制条" id="showFloating"><span>▣</span></button>
@@ -52,14 +52,15 @@
             <div class="panel-heading">
               <div>
                 <div class="eyebrow">STEP 01</div>
-                <h2>点击序列</h2>
+                <h2>操作序列</h2>
               </div>
               <div class="sequence-meta"><span class="live-dot"></span><span id="pointCount">4 个坐标点</span></div>
             </div>
             <div class="sequence-toolbar">
               <button class="primary-button" id="pickPoint"><span class="target-icon">⌖</span> 选取屏幕坐标</button>
               <button class="secondary-button" id="addPoint"><span>＋</span> 手动添加</button>
-              <button class="secondary-button" id="addDelay"><span>＋</span> 添加延迟</button>
+              <button class="secondary-button" id="addDelay"><span>＋</span> 添加等待</button>
+              <button class="secondary-button" id="addLoop"><span>↻</span> 添加循环</button>
               <button class="toolbar-icon" title="撤销" aria-label="撤销" id="undoPoints">↶</button>
               <button class="toolbar-icon" title="重做" aria-label="重做" id="redoPoints">↷</button>
               <button class="toolbar-icon" title="清空全部延迟" id="clearDelays">◷</button>
@@ -76,8 +77,8 @@
             </div>
             <div class="settings-grid">
               <label class="field"><span>新点默认按键</span><select id="clickType"><option>左键单击</option><option>中键单击</option><option>右键单击</option><option>双击</option></select></label>
-              <label class="field"><span>循环次数</span><div class="input-suffix"><input id="loopCount" type="number" min="1" value="10" /><em>次</em></div></label>
-              <label class="field"><span>循环间隔</span><div class="input-suffix"><input id="loopInterval" type="number" min="0" value="800" /><em>ms</em></div></label>
+              <label class="field"><span>流程轮数</span><div class="input-suffix"><input id="loopCount" type="number" min="1" value="1" /><em>轮</em></div></label>
+              <label class="field"><span>流程轮间隔</span><div class="input-suffix"><input id="loopInterval" type="number" min="0" value="800" /><em>ms</em></div></label>
             </div>
             <div class="toggle-row"><div><strong>按序点击</strong><small>当前固定按序列顺序执行（随机顺序开发中）</small></div><button class="toggle" id="orderToggle" aria-label="按序点击（开发中）" title="该开关尚未实现：无论开关状态如何，执行始终按坐标序列顺序进行" disabled><span></span></button></div>
             <div class="toggle-row"><div><strong>随机微移</strong><small>在坐标周围轻微偏移，模拟自然操作</small></div><button class="toggle" id="jitterToggle" aria-label="随机微移"><span></span></button></div>
@@ -119,6 +120,14 @@
       </section>
     </main>
   </div>
+  <dialog id="profileNameEditor" class="editor-dialog" aria-labelledby="profileNameHeading">
+    <form id="profileNameForm">
+      <h2 id="profileNameHeading">重命名配置</h2>
+      <label class="field"><span>配置名称</span><input id="profileNameInput" type="text" maxlength="80" required autocomplete="off" aria-describedby="profileNameError" /></label>
+      <p id="profileNameError" class="field-error" role="alert"></p>
+      <div class="dialog-actions"><button type="button" id="cancelProfileName" class="secondary-button">取消</button><button type="submit" class="primary-button">保存</button></div>
+    </form>
+  </dialog>
   <dialog id="pointEditor" class="editor-dialog">
     <form id="pointForm">
       <h2 id="pointEditorTitle">添加坐标</h2>
@@ -134,10 +143,10 @@
   <dialog id="historyDialog" class="history-dialog">
     <div class="dialog-heading"><h2>运行历史</h2><button id="refreshHistory" class="secondary-button">刷新</button><button id="closeHistory" class="toolbar-icon" title="关闭" aria-label="关闭">×</button></div>
     <p id="historyMessage" role="status"></p>
-    <div class="history-table"><table><thead><tr><th>开始时间</th><th>配置 / 窗口</th><th>结果</th><th>进度</th><th>耗时</th><th>错误</th></tr></thead><tbody id="historyRows"></tbody></table></div>
+    <div class="history-table"><table><thead><tr><th>开始时间</th><th>配置 / 窗口</th><th>结果</th><th>进度（动作组）</th><th>耗时</th><th>错误</th></tr></thead><tbody id="historyRows"></tbody></table></div>
   </dialog>
   <div class="toast" id="toast"></div>
-  <script src="point-settings.js?v=20260914-1"></script>
-  <script src="app.js?v=20260914-2"></script>
+  <script src="point-settings.js?v=20260921-1"></script>
+  <script src="app.js?v=20260921-5"></script>
 </body>
 </html>

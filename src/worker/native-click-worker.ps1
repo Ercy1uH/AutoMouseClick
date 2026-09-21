@@ -27,6 +27,8 @@ public static class NativeMouse {
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
   [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hWnd, out RECT rect);
   [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hWnd, ref POINT point);
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT point);
+  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out int processId);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
@@ -84,7 +86,8 @@ $script:maxPointClicks = [int]$payload.maxPointClicks
 $controlPath = [string]$payload.controlPath
 $random = [Random]::new()
 $script:isPaused = $false
-$completed = 0
+$script:completed = [long]0
+$script:position = @{}
 
 # total 口径：Σ clickCount × loops，与 server.js 的 totalClicks 保持一致
 function Get-PointClickCount {
@@ -105,12 +108,23 @@ function Get-ClickAction {
   return 0
 }
 
-$totalClicks = 0
-foreach ($step in $steps) { if ([string]($step.type) -eq 'click') { $totalClicks += (Get-PointClickCount $step) } }
-$totalClicks = $totalClicks * $loops
+function Measure-Steps {
+  param($Items, [bool]$Inside = $false)
+  [long]$count = 0
+  foreach ($item in $Items) {
+    if ($item.type -eq 'loop') {
+      if ($Inside -or @($item.steps).Count -eq 0 -or $item.repeatCount -lt 1 -or $item.repeatCount -gt 100000 -or [double]$item.repeatCount -ne [long]$item.repeatCount) { throw 'Invalid loop' }
+      $count += [long]$item.repeatCount * (Measure-Steps @($item.steps) $true)
+    } elseif ($item.type -eq 'click') { $count += Get-PointClickCount $item }
+    elseif ($item.type -ne 'delay') { throw 'Unknown step type' }
+  }
+  return $count
+}
+$totalClicks = (Measure-Steps $steps) * [long]$loops
 
 function Emit-Event {
   param([hashtable]$Data)
+  foreach ($key in $script:position.Keys) { if (-not $Data.ContainsKey($key)) { $Data[$key] = $script:position[$key] } }
   try {
     $json = $Data | ConvertTo-Json -Compress -Depth 5
     [Console]::Out.WriteLine($json)
@@ -179,6 +193,10 @@ function Wait-Responsive {
   param([int]$Milliseconds)
   $remaining = [Math]::Max(0, $Milliseconds)
   while ($remaining -gt 0) {
+    if ($script:position.phase -eq 'waiting') {
+      $script:position.remainingMs = $remaining
+      Emit-Event @{ type = 'position'; runId = $runId; completed = $script:completed }
+    }
     Handle-Control
     if (-not (Test-TargetWindow)) { Fail-TargetWindow }
     $slice = [Math]::Min(100, $remaining)
@@ -234,6 +252,91 @@ function Activate-TargetWindow {
   return ([NativeMouse]::GetForegroundWindow() -eq $window)
 }
 
+# SetCursorPos + SendInput 是往系统输入流里注入，并不绑定到某个窗口：
+# 目标不在前台时"调用成功"只说明事件发出去了，不代表它收到了点击。
+# 所以每次点击前都确认一次；必要时安全恢复前台；恢复不了就明确失败，不让进度掩盖错点。
+function Ensure-TargetForeground {
+  if ([NativeMouse]::GetForegroundWindow() -eq $window) { return $true }
+  if (Activate-TargetWindow) { return $true }
+  return ([NativeMouse]::GetForegroundWindow() -eq $window)
+}
+
+# 前台相等 ≠ 点击会落到目标上：目标是非置顶窗口且保持前台时，一个置顶但不激活的窗口
+# 盖在点击位置上，GetForegroundWindow() 仍然等于目标 —— 这是 Z-order 规则。
+# 所以还要按"那个坐标点上实际是谁的窗口"判归属：命中窗口的根祖先必须是目标窗口。
+function Test-PointOwnership {
+  param([int]$X, [int]$Y)
+  [NativeMouse+POINT]$point = New-Object NativeMouse+POINT
+  $point.X = $X
+  $point.Y = $Y
+  $hit = [NativeMouse]::WindowFromPoint($point)
+  if ($hit -eq [IntPtr]::Zero) { return $false }
+  $root = [NativeMouse]::GetAncestor($hit, 2)   # GA_ROOT：取顶层窗口
+  if ($root -eq [IntPtr]::Zero) { $root = $hit }
+  return ($root -eq $window)
+}
+
+function Fail-PointOccluded {
+  Emit-Event @{ type = 'error'; runId = $runId; code = 'TARGET_POINT_OCCLUDED'; message = 'TARGET_POINT_OCCLUDED' }
+  exit 15
+}
+
+function Invoke-StepList {
+  param($Items, $Block = $null, [int]$Iteration = 0)
+  for ($stepIndex = 0; $stepIndex -lt $Items.Count; $stepIndex++) {
+      $step = $Items[$stepIndex]
+      Handle-Control
+      if ($step.type -eq 'loop') {
+        for ($repeat = 1; $repeat -le [int]$step.repeatCount; $repeat++) {
+          Handle-Control
+          Invoke-StepList @($step.steps) $step $repeat
+        }
+        $script:position = @{ loop = $loop + 1; loopId = ''; loopLabel = ''; iteration = 0; repeatCount = 0; phase = 'loop-exit'; stepId = [string]$step.id }
+        Emit-Event @{ type = 'position'; runId = $runId; completed = $script:completed }
+        continue
+      }
+      if ($step.type -ne 'click' -and $step.type -ne 'delay') { throw 'Unknown step type' }
+      $script:position = @{ loop = $loop + 1; loopId = [string]$Block.id; loopLabel = [string]$Block.label; iteration = $Iteration; repeatCount = $Block.repeatCount; stepId = [string]$step.id; stepLabel = [string]$step.label; pointClickIndex = 0; pointClickCount = $step.clickCount; phase = 'click'; remainingMs = 0 }
+      if ($step.type -eq 'delay') { $script:position.phase = 'waiting'; $script:position.remainingMs = [int]$step.ms }
+      Emit-Event @{ type = 'position'; runId = $runId; completed = $script:completed }
+      if ($step.type -eq 'delay') { Wait-Responsive ([int]$step.ms); continue }
+      Invoke-ClickStep $step $stepIndex
+  }
+}
+
+function Invoke-ClickStep {
+  param($step, [int]$stepIndex)
+      $clickCount = Get-PointClickCount $step
+      $clickAction = Get-ClickAction ([string]($step.clickType))
+
+      for ($clickIndex = 0; $clickIndex -lt $clickCount; $clickIndex++) {
+        Handle-Control
+        if (-not (Test-TargetWindow)) { Fail-TargetWindow }
+        if (-not (Ensure-TargetForeground)) { throw 'TARGET_NOT_FOREGROUND' }
+        $clickRect = Get-ClickRect
+        $offsetX = [int]$step.x
+        $offsetY = [int]$step.y
+        if ($jitter) { $offsetX += $random.Next(-3, 4); $offsetY += $random.Next(-3, 4) }
+        $x = [Math]::Max($clickRect.Left + 1, [Math]::Min($clickRect.Right - 2, $clickRect.Left + [int][Math]::Round($offsetX * ($clickRect.Right - $clickRect.Left) / $captureWidth)))
+        $y = [Math]::Max($clickRect.Top + 1, [Math]::Min($clickRect.Bottom - 2, $clickRect.Top + [int][Math]::Round($offsetY * ($clickRect.Bottom - $clickRect.Top) / $captureHeight)))
+        if (-not (Test-PointOwnership $x $y)) { Fail-PointOccluded }
+        if (-not [NativeMouse]::SetCursorPos($x, $y)) { throw 'NATIVE_INPUT_FAILED' }
+        Send-MouseClick $clickAction
+        if ([string]$step.clickType -eq '双击') {
+          Start-Sleep -Milliseconds 50
+          if (-not (Test-TargetWindow)) { Fail-TargetWindow }
+          if (-not (Ensure-TargetForeground)) { throw 'TARGET_NOT_FOREGROUND' }
+          if (-not (Test-PointOwnership $x $y)) { Fail-PointOccluded }
+          if (-not [NativeMouse]::SetCursorPos($x, $y)) { throw 'NATIVE_INPUT_FAILED' }
+          Send-MouseClick $clickAction
+        }
+        $script:completed++
+        $script:position.pointClickIndex = $clickIndex + 1
+        Emit-Event @{ type = 'progress'; runId = $runId; completed = $script:completed; total = $totalClicks; stepIndex = $stepIndex; pointIndex = $stepIndex }
+        if ($clickIndex -lt ($clickCount - 1)) { Wait-Responsive 50 }
+      }
+}
+
 try {
   if ($steps.Count -lt 1 -or -not (Test-TargetWindow)) { Fail-TargetWindow }
 
@@ -249,44 +352,7 @@ try {
   Wait-Responsive 100
 
   for ($loop = 0; $loop -lt $loops; $loop++) {
-    for ($stepIndex = 0; $stepIndex -lt $steps.Count; $stepIndex++) {
-      $step = $steps[$stepIndex]
-      if ([string]($step.type) -eq 'delay') {
-        Wait-Responsive ([int]$step.ms)
-        continue
-      }
-      $clickCount = Get-PointClickCount $step
-      $clickAction = Get-ClickAction ([string]($step.clickType))
-
-      # A progress unit is one single-click or double-click action group.
-      for ($clickIndex = 0; $clickIndex -lt $clickCount; $clickIndex++) {
-        Handle-Control
-        if (-not (Test-TargetWindow)) { Fail-TargetWindow }
-        $clickRect = Get-ClickRect
-        $offsetX = [int]$step.x
-        $offsetY = [int]$step.y
-        if ($jitter) {
-          $offsetX += $random.Next(-3, 4)
-          $offsetY += $random.Next(-3, 4)
-        }
-        $scaleX = ($clickRect.Right - $clickRect.Left) / [double]$captureWidth
-        $scaleY = ($clickRect.Bottom - $clickRect.Top) / [double]$captureHeight
-        if ($scaleX -le 0) { $scaleX = 1 }
-        if ($scaleY -le 0) { $scaleY = 1 }
-        $x = [Math]::Max($clickRect.Left + 1, [Math]::Min($clickRect.Right - 2, $clickRect.Left + [int][Math]::Round($offsetX * $scaleX)))
-        $y = [Math]::Max($clickRect.Top + 1, [Math]::Min($clickRect.Bottom - 2, $clickRect.Top + [int][Math]::Round($offsetY * $scaleY)))
-        if ($completed -eq 0) { Emit-Event @{ type = 'diagnostic'; runId = $runId; rect = $clickRect; capture = @{ width = $captureWidth; height = $captureHeight }; point = @{ x = $offsetX; y = $offsetY }; screen = @{ x = $x; y = $y } } }
-        if (-not [NativeMouse]::SetCursorPos($x, $y)) {
-          Emit-Event @{ type = 'error'; runId = $runId; code = 'NATIVE_INPUT_FAILED'; message = 'NATIVE_INPUT_FAILED' }
-          exit 13
-        }
-        Send-MouseClick $clickAction
-        if ([string]($step.clickType) -eq '双击') { Wait-Responsive 50; Send-MouseClick $clickAction }
-        $completed++
-        Emit-Event @{ type = 'progress'; runId = $runId; completed = $completed; total = $totalClicks; loop = $loop + 1; stepIndex = $stepIndex; pointIndex = $stepIndex; pointClickIndex = $clickIndex + 1 }
-        if ($clickIndex -lt ($clickCount - 1)) { Wait-Responsive 50 }
-      }
-    }
+    Invoke-StepList $steps
     if ($loop -lt ($loops - 1) -and $loopInterval -gt 0) { Wait-Responsive $loopInterval }
   }
 

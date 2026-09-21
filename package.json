@@ -1,15 +1,19 @@
 {
   "name": "mouseclik",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "description": "点序 Windows 多点连点器",
   "main": "src/main/main.js",
   "private": true,
   "scripts": {
     "prepare:github": "node scripts/prepare-github.cjs",
-    "test": "node --test tests/*.test.js",
-    "test:ui": "node tests/ui-smoke.cjs && node tests/point-settings-ui.cjs",
+    "test": "npm run test:unit && npm run test:worker && npm run test:ui",
+    "test:unit": "node --test tests/*.test.js",
+    "test:worker": "powershell -NoProfile -ExecutionPolicy Bypass -File tests/worker-settings.test.ps1",
+    "test:ui": "node tests/run-suites.cjs ui",
+    "test:e2e": "node tests/run-suites.cjs e2e",
+    "test:desktop": "node tests/run-suites.cjs desktop",
     "start": "electron .",
-    "dist": "electron-builder --win portable && node scripts/verify-dist.cjs"
+    "dist": "node scripts/clean-dist.cjs && electron-builder --win portable && node scripts/verify-dist.cjs"
   },
   "build": {
     "appId": "local.mouseclik.app",

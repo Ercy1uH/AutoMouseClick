@@ -9,12 +9,21 @@ const files = [
   'src/renderer/app.js', 'src/core/debug-log.js', 'src/renderer/floating.css', 'src/renderer/floating.html', 'src/renderer/floating.js',
   'src/renderer/index.html', 'src/main/main.js', 'src/worker/native-click-worker.ps1', 'src/renderer/point-settings.js',
   'src/main/preload.js', 'src/core/profile-store.js', 'src/core/run-history.js', 'src/main/server.js', 'src/renderer/style.css',
-  'scripts/prepare-github.cjs', 'scripts/verify-dist.cjs',
+  'scripts/prepare-github.cjs', 'scripts/verify-dist.cjs', 'scripts/clean-dist.cjs',
+  'releases/v1.5.0.md', 'releases/archive/BUILD_RECORD-1.4.2.md',
   'tests/auth.test.js', 'tests/backend.test.js', 'tests/debug-log.test.js',
   'tests/desktop.test.js', 'tests/floating.test.js', 'tests/history.test.js',
-  'tests/point-settings-ui.cjs', 'tests/profile-store.test.js',
-  'tests/desktop-interactions.cjs', 'tests/startup-state.test.js',
-  'tests/ui-smoke.cjs', 'tests/worker-settings.test.ps1',
+  'tests/profile-store.test.js', 'tests/startup-state.test.js',
+  'tests/worker-settings.test.ps1', 'tests/loops.test.js',
+  'tests/clean-dist.test.js', 'tests/verify-dist.test.js',
+  'tests/http-request.cjs', 'tests/http-request.test.js',
+  'tests/run-suites.cjs', 'tests/run-suites.test.js', 'tests/powershell-encoding.test.js',
+  'tests/desktop/desktop-interactions.cjs',
+  'tests/e2e/e2e-http.cjs', 'tests/e2e/e2e-ui.cjs',
+  'tests/ui/ui-smoke.cjs', 'tests/ui/point-settings-ui.cjs',
+  'tests/ui/loop-ui.cjs', 'tests/ui/loop-preview-ui.cjs', 'tests/ui/profile-floating-ui.cjs',
+  'tests/manual/observer-window.ps1', 'tests/manual/steal-foreground.ps1',
+  'tests/manual/verify-click-mapping.ps1', 'tests/manual/verify-clicks.ps1',
 ];
 const checks = [
   ['private key', /-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----/],
@@ -26,7 +35,6 @@ const checks = [
 ];
 const fixtures = new Map([
   ['tests/auth.test.js', 'test-token-0123456789'],
-  ['tests/ui-smoke.cjs', 'feature-check'],
 ]);
 const upstreamContact = ['i', 'izs.me'].join('@');
 const contents = new Map();

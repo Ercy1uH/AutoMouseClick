@@ -42,6 +42,8 @@ const STOP_GRACE_MS = 1500;
 const WORKER_ERROR_MESSAGES = {
   TARGET_WINDOW_CLOSED: '目标窗口已关闭或句柄已失效',
   TARGET_WINDOW_UNAVAILABLE: '无法激活目标窗口',
+  TARGET_NOT_FOREGROUND: '目标窗口不在前台且无法恢复，已停止以避免点错位置',
+  TARGET_POINT_OCCLUDED: '点击位置上不是目标窗口（被其它窗口覆盖），已停止以避免点错位置',
   NATIVE_INPUT_FAILED: '无法移动鼠标到目标坐标',
   WORKER_EXCEPTION: '点击 worker 执行失败',
   WORKER_START_FAILED: '点击 worker 启动失败',
@@ -77,6 +79,14 @@ function publicRun(run) {
     loop: run.loop,
     pointIndex: run.pointIndex,
     pointClickIndex: run.pointClickIndex || 0,
+    loopId: run.loopId || '',
+    loopLabel: run.loopLabel || '',
+    iteration: run.iteration || 0,
+    repeatCount: run.repeatCount || 0,
+    stepId: run.stepId || '',
+    stepLabel: run.stepLabel || '',
+    phase: run.phase || '',
+    remainingMs: run.remainingMs || 0,
     errorCode: run.errorCode,
     errorMessage: run.errorMessage,
     startedAt: run.startedAt,
@@ -169,6 +179,19 @@ function handleWorkerEvent(run, event) {
       pointIndex: Number.isFinite(Number(event.stepIndex)) ? Number(event.stepIndex) : Number.isFinite(Number(event.pointIndex)) ? Number(event.pointIndex) : run.pointIndex,
       pointClickIndex: Number(event.pointClickIndex) || 0
     });
+  } else if (type === 'position') {
+    updateRun(run, {
+      status: run.stopRequested ? 'stopping' : 'running',
+      loop: Number(event.loop) || run.loop,
+      loopId: String(event.loopId || run.loopId || ''),
+      loopLabel: String(event.loopLabel || run.loopLabel || ''),
+      iteration: Number(event.iteration) || 0,
+      repeatCount: Number(event.repeatCount) || 0,
+      stepId: String(event.stepId || run.stepId || ''),
+      stepLabel: String(event.stepLabel || run.stepLabel || ''),
+      phase: String(event.phase || run.phase || ''),
+      remainingMs: Number(event.remainingMs) || 0
+    });
   } else if (type === 'paused') {
     if (!run.stopRequested) updateRun(run, { status: 'paused' });
   } else if (type === 'resumed') {
@@ -193,19 +216,34 @@ function handleWorkerEvent(run, event) {
   }
 }
 
-function parseWorkerOutput(run, chunk) {
-  run.stdoutBuffer += chunk;
+function parseWorkerLine(run, text) {
+  const trimmed = String(text).trim();
+  if (!trimmed) return;
+  try {
+    handleWorkerEvent(run, JSON.parse(trimmed));
+  } catch (error) {
+    debugLog('run.worker_output_parse_error', { runId: run.runId, message: error.message, line: trimmed.slice(0, 1000) });
+  }
+}
+
+// 按换行切分缓冲区；最后一段可能是半行，留在缓冲区里等下一个 chunk。
+function drainWorkerLines(run) {
   const lines = run.stdoutBuffer.split(/\r?\n/);
   run.stdoutBuffer = lines.pop() || '';
-  for (const line of lines) {
-    const text = line.trim();
-    if (!text) continue;
-    try {
-      handleWorkerEvent(run, JSON.parse(text));
-    } catch (error) {
-      debugLog('run.worker_output_parse_error', { runId: run.runId, message: error.message, line: text.slice(0, 1000) });
-    }
-  }
+  for (const line of lines) parseWorkerLine(run, line);
+}
+
+function parseWorkerOutput(run, chunk) {
+  run.stdoutBuffer += chunk;
+  drainWorkerLines(run);
+}
+
+// 退出时把最后一条没有换行结尾的记录也处理掉。
+// 不能把缓冲区再拼一次交给 parseWorkerOutput —— 那会把残行拼两遍、必然解析失败。
+function flushWorkerOutput(run) {
+  const residual = run.stdoutBuffer;
+  run.stdoutBuffer = '';
+  if (residual.trim()) parseWorkerLine(run, residual);
 }
 
 function writeControl(run, command) {
@@ -354,13 +392,7 @@ function startNativeRun(res, payload) {
   if (!/^\d+$/.test(windowId) || !sourceSteps.some((step) => step?.type !== 'delay')) return send(res, 400, { error: '目标窗口或点击步骤无效' });
   let safeSteps;
   try {
-    if (sourceSteps.length > MAX_STEPS) throw new Error(`最多支持 ${MAX_STEPS} 个步骤`);
-    if (sourceSteps.filter((step) => step?.type !== 'delay').length > MAX_CLICK_STEPS) throw new Error(`最多支持 ${MAX_CLICK_STEPS} 个点击步骤`);
-    safeSteps = sourceSteps.map((step) => {
-      const settings = requireStepSettings(step, fallbackClickType);
-      if (settings.type === 'delay') return settings;
-      return { type: 'click', x: integer(step?.x, 0, 9999, 'x'), y: integer(step?.y, 0, 9999, 'y'), clickType: settings.clickType, clickCount: settings.clickCount };
-    });
+    safeSteps = require('../renderer/point-settings').validateTree(sourceSteps, { running: true, fallbackClickType });
   } catch (error) { return send(res, 400, { error: error.message }); }
   const total = totalClicks(safeSteps, loops);
   startingRun = true;
@@ -431,7 +463,7 @@ function startNativeRun(res, payload) {
       setRunError(run, 'WORKER_START_FAILED', `点击 worker 发生错误：${childError.message}`);
     });
     child.once('close', (code, signal) => {
-      if (run.stdoutBuffer.trim()) parseWorkerOutput(run, `${run.stdoutBuffer}\n`);
+      if (run.stdoutBuffer.trim()) flushWorkerOutput(run);
       finishRun(run, code, signal);
     });
     debugLog('run.started', { runId, pid: child.pid, total: run.total, windowId, targetProcessId: target.ProcessId });

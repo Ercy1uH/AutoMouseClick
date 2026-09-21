@@ -5,14 +5,18 @@ const defaultPoints = [
   { x: 428, y: 614, label: '返回入口' }
 ];
 
-const pointColor = (step) => PointSettings.BUTTON_COLORS[step.clickType] || PointSettings.BUTTON_COLORS[PointSettings.DEFAULT_CLICK_TYPE];
+const pointColor = (step) => {
+  const color = PointSettings.BUTTON_COLORS[step.clickType] || PointSettings.BUTTON_COLORS[PointSettings.DEFAULT_CLICK_TYPE];
+  if (!locateStep(step.id)?.parent) return color;
+  return '#' + color.slice(1).match(/.{2}/g).map(channel => Math.round(parseInt(channel, 16) * 0.72).toString(16).padStart(2, '0')).join('');
+};
 const pointColorSoft = (step) => `${pointColor(step)}6b`;
 
 // 需求3：连续点击次数的钳制与统计（与服务端 / worker 同口径）
 const MAX_POINT_CLICKS = PointSettings.MAX_POINT_CLICKS;
 const RUN_WARN_CLICKS = 50000;
 const normalizeClicks = (value) => PointSettings.requireStepSettings({ type: 'click', clickCount: value }).clickCount;
-const sumClicks = (steps) => (Array.isArray(steps) ? steps : []).reduce((sum, step) => sum + (step.type === 'click' ? normalizeClicks(step.clickCount) : 0), 0);
+const sumClicks = (steps) => PointSettings.metrics(steps).clicks;
 
 // 耗时格式化：支持超过 60 秒（10^9 次点击场景下 00:SS 会溢出）
 function formatDuration(seconds) {
@@ -100,6 +104,53 @@ const toast = (message) => { const el = $('toast'); el.textContent = message; el
 const currentProfile = () => state.profiles[state.active];
 const pointHistory = new WeakMap();
 let pointEditorTarget = null;
+let profileNameTarget = null;
+
+function openProfileNameEditor() {
+  if (!canEditPoints()) return;
+  profileNameTarget = currentProfile();
+  $('profileNameInput').value = profileNameTarget.name;
+  $('profileNameError').textContent = '';
+  $('profileNameInput').removeAttribute('aria-invalid');
+  $('profileNameEditor').showModal();
+  $('profileNameInput').focus();
+  $('profileNameInput').select();
+}
+let selectedStepId = null;
+const collapsedLoops = new Set();
+const expandedDuringRun = new Set();
+const allSteps = (profile = currentProfile()) => PointSettings.flatten(profile.steps);
+function locateStep(id) {
+  const steps = currentProfile().steps;
+  for (let index = 0; index < steps.length; index++) {
+    if (steps[index].id === id) return { list: steps, index, step: steps[index], parent: null };
+    if (steps[index].type === 'loop') {
+      const child = steps[index].steps.findIndex(step => step.id === id);
+      if (child >= 0) return { list: steps[index].steps, index: child, step: steps[index].steps[child], parent: steps[index] };
+    }
+  }
+  return null;
+}
+function changeSequence(edit) {
+  if (!canEditPoints()) return false;
+  const profile = currentProfile(), original = structuredClone(profile.steps);
+  try { edit(); profile.steps = PointSettings.validateTree(profile.steps); renderAll(); return true; }
+  catch (error) { profile.steps = original; toast(error.message); return false; }
+}
+function insertStep(step) {
+  return changeSequence(() => {
+    const selected = locateStep(selectedStepId);
+    if (step.type === 'loop') {
+      const anchor = selected?.parent || selected?.step;
+      const index = anchor ? currentProfile().steps.indexOf(anchor) + 1 : currentProfile().steps.length;
+      currentProfile().steps.splice(index, 0, step);
+      if (selected?.parent) toast('新循环已添加到当前循环之后');
+    } else if (selected?.step.type === 'loop') { selected.step.steps.push(step); collapsedLoops.delete(selected.step.id); }
+    else if (selected) { selected.list.splice(selected.index + 1, 0, step); if (selected.parent) collapsedLoops.delete(selected.parent.id); }
+    else currentProfile().steps.push(step);
+    selectedStepId = step.id;
+  });
+}
 
 function canEditPoints() {
   if (['starting', 'running', 'paused', 'stopping'].includes(state.runStatus) || state.pendingRun || state.nativeRunId) { toast('请先停止执行再编辑坐标'); return false; }
@@ -112,12 +163,7 @@ function normalizeProfilePoints(profile) {
     const fallbackDelay = PointSettings.legacyInterval(profile.pointInterval);
     profile.steps = PointSettings.pointsToSteps((profile.points || []).map((point) => ({ ...point, intervalAfterMs: point.intervalAfterMs === undefined ? fallbackDelay : point.intervalAfterMs })));
   }
-  profile.steps = profile.steps.slice(0, PointSettings.MAX_STEPS).map((step) => {
-    const settings = PointSettings.requireStepSettings(step, profile.defaultClickType, PointSettings.legacyInterval(profile.pointInterval));
-    if (settings.type === 'delay') return settings;
-    const label = typeof step.label === 'string' ? step.label.trim() : '';
-    return { type: 'click', x: Number(step.x), y: Number(step.y), label, labelAuto: PointSettings.resolveLabelAuto(step, label), clickType: settings.clickType, clickCount: settings.clickCount };
-  });
+  profile.steps = PointSettings.validateTree(profile.steps, { fallbackClickType: profile.defaultClickType });
   PointSettings.applyAutoLabels(profile.steps);
   delete profile.points; delete profile.clickType; delete profile.pointInterval;
 }
@@ -126,8 +172,9 @@ function updatePoint(target, patch, profile = currentProfile()) {
   if (!canEditPoints() || profile !== currentProfile()) return false;
   // RV-15：改用索引定位，不再依赖对象引用身份。normalizeProfilePoints 每次都会把 steps 换成
   // 新数组，跨渲染残留的引用会让 includes() 为 false —— 编辑会被"静默丢弃"，没有任何提示。
-  const index = Number.isInteger(target) ? target : profile.steps.indexOf(target);
-  const point = profile.steps[index];
+  const points = allSteps(profile);
+  const index = Number.isInteger(target) ? target : points.findIndex(point => point.id === target?.id || point.id === target);
+  const point = points[index];
   if (!point) { clientDebug('point_update_missing', { index, patch: Object.keys(patch) }); return false; }
   try {
     const next = { ...point, ...patch };
@@ -142,14 +189,15 @@ function updatePoint(target, patch, profile = currentProfile()) {
 
 function syncPointControls() {
   const locked = ['starting', 'running', 'paused', 'stopping'].includes(state.runStatus);
-  document.querySelectorAll('#pointList input, #pointList button').forEach((control) => { control.disabled = locked; });
+  $('renameProfile').disabled = locked;
+  document.querySelectorAll('#pointList input, #pointList select, #pointList button:not(.loop-collapse), #addLoop, #addPoint, #addDelay, #clickType, #loopCount, #loopInterval, #addProfile').forEach((control) => { control.disabled = locked; });
   document.querySelectorAll('.point-row').forEach((row) => { row.draggable = !locked; });
 }
 
 function bindPointSettings() {
   const profile = currentProfile();
   document.querySelectorAll('[data-setting]').forEach((input) => {
-    const point = profile.steps[Number(input.dataset.index)];
+    const point = allSteps(profile)[Number(input.dataset.index)];
     const field = input.dataset.setting;
     const commit = () => {
       if (!input.isConnected) return;
@@ -170,7 +218,7 @@ function bindPointSettings() {
   document.querySelectorAll('[data-click-delta]').forEach((button) => {
     button.addEventListener('mousedown', (event) => event.preventDefault());
     button.addEventListener('click', () => {
-      const point = profile.steps[Number(button.dataset.index)];
+      const point = allSteps(profile)[Number(button.dataset.index)];
       const value = point.clickCount + Number(button.dataset.clickDelta);
       if (value >= 1 && value <= MAX_POINT_CLICKS) updatePoint(point, { clickCount: value }, profile);
     });
@@ -205,9 +253,9 @@ function restorePoints(direction) {
 function openPointEditor(index = null) {
   if (!canEditPoints()) return;
   const profile = currentProfile();
-  if (index === null && profile.steps.filter((step) => step.type === 'click').length >= PointSettings.MAX_CLICK_STEPS) return toast('最多支持 100 个点击步骤');
+  if (index === null && allSteps(profile).filter((step) => step.type === 'click').length >= PointSettings.MAX_CLICK_STEPS) return toast('最多支持 100 个点击步骤');
   pointEditorTarget = { profile, index };
-  const point = index === null ? { type: 'click', x: 0, y: 0, label: '', labelAuto: true, clickType: profile.defaultClickType, clickCount: 1 } : profile.steps[index];
+  const point = index === null ? { type: 'click', x: 0, y: 0, label: '', labelAuto: true, clickType: profile.defaultClickType, clickCount: 1 } : allSteps(profile)[index];
   $('pointEditorTitle').textContent = index === null ? '添加坐标' : '编辑坐标';
   $('pointLabel').value = point.label; $('pointX').value = point.x; $('pointY').value = point.y;
   $('pointEditor').showModal(); $('pointX').focus(); $('pointX').select();
@@ -225,7 +273,9 @@ async function loadHistory() {
     for (const entry of body.entries) {
       const row = document.createElement('tr');
       const seconds = Math.max(0, Math.round((Date.parse(entry.endedAt || new Date().toISOString()) - Date.parse(entry.startedAt)) / 1000));
-      for (const value of [new Date(entry.startedAt).toLocaleString(), `${entry.profileName || '未命名配置'} / ${entry.windowTitle || '未知窗口'}`, names[entry.status] || entry.status, `${entry.completed} / ${entry.total}`, `${seconds} 秒`, entry.errorMessage || entry.errorCode || '']) {
+      // RV-19：v1 老记录的计数口径无法确认（点 or 动作组），只能标注，不能按当前配置倒推。
+      const countNote = entry.countUnit === 'actionGroup' ? '' : '（旧版口径未确认）';
+      for (const value of [new Date(entry.startedAt).toLocaleString(), `${entry.profileName || '未命名配置'} / ${entry.windowTitle || '未知窗口'}`, names[entry.status] || entry.status, `${entry.completed} / ${entry.total}${countNote}`, `${seconds} 秒`, entry.errorMessage || entry.errorCode || '']) {
         const cell = document.createElement('td'); cell.textContent = value; row.appendChild(cell);
       }
       $('historyRows').appendChild(row);
@@ -370,6 +420,7 @@ function publishFloatingState() {
     total,
     progress: total ? completed / total * 100 : 0,
     errorMessage: snapshot.errorMessage || ''
+    ,detail: runDetailText(snapshot, state.runStatus)
   });
 }
 
@@ -423,7 +474,9 @@ function runDetailText(run, status) {
   if (status === 'running') {
     const loop = Number(run.loop) || 0;
     const point = Number(run.pointIndex);
-    return `第 ${loop} 轮 · 坐标 ${point >= 0 ? point + 1 : '-'} · 点内 ${run.pointClickIndex || 0} 次 · ${run.completed || 0} / ${run.total || 0}`;
+    const location = run.loopLabel ? `${run.loopLabel}：第 ${run.iteration || 0} / ${run.repeatCount || 0} 次` : '主序列';
+    const action = run.phase === 'waiting' ? `等待中 · 剩余 ${run.remainingMs || 0} ms` : `${run.stepLabel || `坐标 ${point >= 0 ? point + 1 : '-'}`} 点击 ${run.pointClickIndex || 0}`;
+    return `流程 ${loop} · ${location} · ${action} · ${run.completed || 0} / ${run.total || 0}`;
   }
   if (status === 'completed') return `已完成 ${run.completed || run.total || 0} / ${run.total || 0} 次`;
   if (status === 'stopped') return `已停止 · 完成 ${run.completed || 0} / ${run.total || 0} 次`;
@@ -457,8 +510,8 @@ function renderRunState(run = null) {
   $('sideStatusDot').classList.toggle('running', activeVisual);
   $('sideStatusText').textContent = status === 'running' ? '点击中 · F6 暂停' : status === 'paused' ? '已暂停 · F6 继续' : status === 'stopping' ? '正在停止...' : status === 'error' ? '运行异常，请查看提示' : status === 'completed' ? '运行完成' : status === 'stopped' ? '已停止' : '就绪，等待开始';
   const pointIndex = Number(snapshot.pointIndex);
-  document.querySelectorAll('.point-row').forEach((row) => row.classList.toggle('current', activeVisual && pointIndex >= 0 && Number(row.dataset.step) === pointIndex));
-  document.querySelectorAll('.marker').forEach((marker) => marker.classList.toggle('current', activeVisual && pointIndex >= 0 && Number(marker.dataset.step) === pointIndex));
+  document.querySelectorAll('.point-row').forEach((row) => row.classList.toggle('current', activeVisual && snapshot.stepId ? row.dataset.id === snapshot.stepId : activeVisual && pointIndex >= 0 && Number(row.dataset.step) === pointIndex));
+  document.querySelectorAll('.marker').forEach((marker) => marker.classList.toggle('current', activeVisual && snapshot.stepId ? marker.dataset.id === snapshot.stepId : activeVisual && pointIndex >= 0 && Number(marker.dataset.step) === pointIndex));
   publishFloatingState();
 }
 
@@ -553,19 +606,20 @@ function stopNativeRun() {
 
 function renderProfiles() {
   $('slotCount').textContent = `${state.profiles.length} / 8`;
-  $('profileList').innerHTML = state.profiles.map((profile, index) => { const count = Array.isArray(profile.steps) ? profile.steps.filter((step) => step.type === 'click').length : (profile.points || []).length; return `<button class="profile-item ${index === state.active ? 'active' : ''}" data-profile="${index}"><span class="profile-icon">${String(index + 1).padStart(2, '0')}</span><span class="profile-copy"><span class="profile-name">${escapeHtml(profile.name)}</span><span class="profile-sub">${count} 个点击步骤</span></span><span class="profile-more">···</span></button>`; }).join('');
+  $('profileList').innerHTML = state.profiles.map((profile, index) => { const count = PointSettings.flatten(profile.steps || []).filter((step) => step.type === 'click').length; return `<button class="profile-item ${index === state.active ? 'active' : ''}" data-profile="${index}"><span class="profile-icon">${String(index + 1).padStart(2, '0')}</span><span class="profile-copy"><span class="profile-name">${escapeHtml(profile.name)}</span><span class="profile-sub">${count} 个点击步骤</span></span><span class="profile-more">···</span></button>`; }).join('');
   document.querySelectorAll('[data-profile]').forEach((button) => button.addEventListener('click', () => { if (state.running) stopRun(); state.active = Number(button.dataset.profile); renderAll(); }));
 }
 
 function renderPoints() {
   checkpointPoints();
-  const points = currentProfile().steps;
+  const points = allSteps();
   const clickCount = points.filter((step) => step.type === 'click').length;
   $('pointCount').textContent = `${points.length} 个步骤 · ${clickCount} 个点击`;
-  $('pointList').innerHTML = points.length ? points.map((point, index) => point.type === 'delay'
+  $('pointList').innerHTML = points.length ? points.map((point, index) => point.type === 'loop' ? `<section class="loop-card" data-loop-id="${point.id}"><header draggable="true" data-loop-drag="${point.id}"><button class="loop-collapse" aria-label="折叠或展开 ${escapeHtml(point.label)}" aria-expanded="${!collapsedLoops.has(point.id)}">${collapsedLoops.has(point.id) ? '▶' : '▼'}</button><strong>${escapeHtml(point.label)}</strong><span class="loop-state"></span><label>重复 <input data-setting="repeatCount" data-index="${index}" type="number" min="1" max="100000" value="${point.repeatCount}" aria-label="重复次数"> 次</label><small>框内全部步骤执行一遍，计为一次。</small><select class="loop-menu" aria-label="循环操作"><option value="">操作…</option value="rename">重命名</option><option value="copy">复制</option><option value="up">上移</option><option value="down">下移</option><option value="dissolve">解散后取消重复</option><option value="delete">删除循环及内容</option></select></header><p class="loop-summary">重复 ${point.repeatCount} 次 · ${point.steps.filter(s => s.type === 'click').length} 个点击步骤 · ${point.steps.filter(s => s.type === 'delay').length} 个等待 · 共 ${sumClicks([point])} 次点击动作</p><div class="loop-body" ${collapsedLoops.has(point.id) ? 'hidden' : ''}></div></section>` : point.type === 'delay'
     ? `<div class="point-row delay-row" draggable="true" data-point="${index}" data-step="${index}"><span class="drag-handle">⠿</span><span class="delay-icon">◷</span><label>等待 <input data-setting="ms" data-index="${index}" type="number" min="0" max="${PointSettings.MAX_DELAY_MS}" step="1" value="${point.ms}" aria-label="等待时间"> ms</label><span class="point-actions"><button class="point-action point-up" title="上移">↑</button><button class="point-action point-down" title="下移">↓</button><button class="point-action point-remove" title="删除">×</button></span></div>`
     : `<div class="point-row click-row" draggable="true" data-point="${index}" data-step="${index}"><span class="drag-handle">⠿</span><span class="point-index" style="background:${pointColor(point)}">${String(index + 1).padStart(2,'0')}</span><span><span class="point-label">${escapeHtml(point.label)}</span><span class="point-coord">X ${String(point.x).padStart(4,'0')}　Y ${String(point.y).padStart(4,'0')}</span><span class="click-type-segments">${PointSettings.CLICK_TYPES.map((type) => `<button type="button" data-click-type="${type}" data-index="${index}" class="${point.clickType === type ? 'active' : ''}" title="${type}">${PointSettings.MARKER_NAME[type]}</button>`).join('')}</span></span><span class="click-stepper"><button data-click-delta="-1" data-index="${index}" title="减少连续点击次数">−</button><input data-setting="clickCount" data-index="${index}" type="number" min="1" max="${MAX_POINT_CLICKS}" step="1" value="${point.clickCount}" aria-label="连续点击次数"><button data-click-delta="1" data-index="${index}" title="增加连续点击次数">+</button></span><span class="point-actions"><button class="point-action point-edit" title="编辑坐标">✎</button><button class="point-action point-up" title="上移">↑</button><button class="point-action point-down" title="下移">↓</button><button class="point-action point-remove" title="删除">×</button></span></div>`).join('') : '<div class="empty-points">还没有步骤</div>';
-  document.querySelectorAll('.point-remove').forEach((button) => button.addEventListener('click', (event) => { points.splice(Number(event.target.closest('.point-row').dataset.step), 1); PointSettings.applyAutoLabels(points); renderAll(); }));
+  arrangeLoopCards(points);
+  document.querySelectorAll('.point-remove').forEach((button) => button.addEventListener('click', (event) => { const item = points[Number(event.target.closest('.point-row').dataset.step)]; changeSequence(() => { const location = locateStep(item.id); location.list.splice(location.index, 1); }); }));
   document.querySelectorAll('.point-up').forEach((button) => button.addEventListener('click', (event) => movePoint(Number(event.target.closest('.point-row').dataset.step), -1)));
   document.querySelectorAll('.point-down').forEach((button) => button.addEventListener('click', (event) => movePoint(Number(event.target.closest('.point-row').dataset.step), 1)));
   document.querySelectorAll('[data-click-type]').forEach((button) => button.addEventListener('click', () => updatePoint(points[Number(button.dataset.index)], { clickType: button.dataset.clickType })));
@@ -573,15 +627,97 @@ function renderPoints() {
   bindPointSettings(); setupDrag(); renderMarkers(); if (state.runStatus === 'idle') updateRunDetail();
 }
 
-function movePoint(index, direction) { const points = currentProfile().steps; const next = index + direction; if (next < 0 || next >= points.length) return; [points[index], points[next]] = [points[next], points[index]]; PointSettings.applyAutoLabels(points); renderAll(); }
-function setupDrag() { let dragged = null; document.querySelectorAll('.point-row').forEach((row) => { row.addEventListener('dragstart', () => { dragged = Number(row.dataset.step); row.style.opacity = '.45'; }); row.addEventListener('dragend', () => { row.style.opacity = ''; }); row.addEventListener('dragover', (event) => event.preventDefault()); row.addEventListener('drop', (event) => { event.preventDefault(); const target = Number(row.dataset.step); if (dragged === null || dragged === target) return; const points = currentProfile().steps; const [item] = points.splice(dragged, 1); points.splice(target, 0, item); dragged = null; PointSettings.applyAutoLabels(points); renderAll(); }); }); }
 
+function selectStep(id) {
+  selectedStepId = id;
+  document.querySelectorAll('.point-row').forEach(row => row.classList.toggle('selected', row.dataset.id === id));
+  document.querySelectorAll('.loop-card').forEach(card => { card.classList.toggle('selected', card.dataset.loopId === id); card.querySelector('.loop-state').textContent = card.dataset.loopId === id ? '正在编辑' : ''; });
+  const target = locateStep(id);
+  const parent = target?.step.type === 'loop' ? target.step : target?.parent;
+  $('previewHint').textContent = `新增位置：${parent ? `${parent.label} 内` : '主序列'}`;
+  renderMarkers();
+}
+function arrangeLoopCards(points) {
+  points.forEach((point, index) => {
+    if (point.type === 'loop') return;
+    const row = document.querySelector(`.point-row[data-step="${index}"]`);
+    row.dataset.id = point.id;
+    const location = locateStep(point.id);
+    if (location.parent) document.querySelector(`[data-loop-id="${location.parent.id}"] .loop-body`).appendChild(row);
+    row.tabIndex = 0;
+    row.addEventListener('click', () => selectStep(point.id));
+    row.addEventListener('focusin', () => selectStep(point.id));
+  });
+  document.querySelectorAll('.loop-card').forEach(card => {
+    const id = card.dataset.loopId, block = locateStep(id).step;
+    card.querySelector('header').addEventListener('click', () => selectStep(id));
+    card.querySelector('.loop-collapse').onclick = () => { collapsedLoops.has(id) ? collapsedLoops.delete(id) : collapsedLoops.add(id); renderPoints(); };
+    card.querySelector('.loop-menu').onchange = event => {
+      const action = event.target.value; event.target.value = '';
+      if (!action) return;
+      if (action === 'up' || action === 'down') return movePoint(points.indexOf(block), action === 'up' ? -1 : 1);
+      const name = action === 'rename' ? prompt('循环名称', block.label) : null;
+      if (action === 'rename' && !name?.trim()) return;
+      changeSequence(() => {
+        const location = locateStep(id);
+        if (action === 'rename') block.label = name.trim();
+        if (action === 'delete') location.list.splice(location.index, 1);
+        if (action === 'dissolve') location.list.splice(location.index, 1, ...block.steps);
+        if (action === 'copy') { const copy = structuredClone(block); PointSettings.flatten([copy]).forEach(step => { step.id = PointSettings.newId(); }); location.list.splice(location.index + 1, 0, copy); }
+      });
+    };
+    const body = card.querySelector('.loop-body');
+    const footer = document.createElement('div'); footer.className = 'loop-footer'; footer.dataset.dropInto = id;
+    footer.innerHTML = '<button type="button">＋添加点击到循环内</button><button type="button">＋添加等待到循环内</button><span>循环结束</span>';
+    footer.children[0].onclick = () => { selectStep(id); addPoint(); };
+    footer.children[1].onclick = () => { selectStep(id); addDelay(); };
+    body.appendChild(footer);
+    const after = document.createElement('button'); after.className = 'loop-after'; after.dataset.dropAfter = id; after.textContent = '＋添加后续步骤';
+    after.onclick = () => { selectedStepId = id; const step = { id: PointSettings.newId(), type: 'delay', ms: PointSettings.DEFAULT_DELAY_MS }; changeSequence(() => { const location = locateStep(id); location.list.splice(location.index + 1, 0, step); selectedStepId = step.id; }); };
+    card.after(after);
+  });
+  selectStep(selectedStepId);
+}
+function relocate(id, destination, beforeId = null) {
+  changeSequence(() => {
+    const source = locateStep(id), target = destination === 'root' ? null : locateStep(destination)?.step;
+    if (!source || (target && target.type !== 'loop')) throw new Error('移动位置无效');
+    if (source.step.type === 'loop' && target) throw new Error('不支持嵌套循环');
+    if (beforeId === id) return;
+    const [step] = source.list.splice(source.index, 1), list = target ? target.steps : currentProfile().steps;
+    const index = beforeId ? list.findIndex(s => s.id === beforeId) : list.length;
+    list.splice(index < 0 ? list.length : index, 0, step);
+    if (target) collapsedLoops.delete(target.id);
+    selectedStepId = id;
+  });
+}
+function movePoint(index, direction) {
+  const point = allSteps()[index]; if (!point) return;
+  changeSequence(() => { const location = locateStep(point.id), next = location.index + direction; if (next < 0 || next >= location.list.length) return; [location.list[location.index], location.list[next]] = [location.list[next], location.list[location.index]]; });
+}
+function setupDrag() {
+  let dragged = null;
+  document.querySelectorAll('.point-row, [data-loop-drag]').forEach(row => {
+    row.addEventListener('dragstart', event => { if (!canEditPoints()) return event.preventDefault(); dragged = row.dataset.id || row.dataset.loopDrag; event.dataTransfer.setData('text/plain', dragged); });
+  });
+  document.querySelectorAll('.point-row, [data-drop-into], [data-drop-after], [data-loop-drag]').forEach(row => {
+    row.addEventListener('dragover', event => { event.preventDefault(); row.classList.add('drop-target'); });
+    row.addEventListener('dragleave', () => row.classList.remove('drop-target'));
+    row.addEventListener('drop', event => {
+      event.preventDefault(); event.stopPropagation(); row.classList.remove('drop-target'); if (!dragged) return;
+      if (row.dataset.dropInto) relocate(dragged, row.dataset.dropInto);
+      else if (row.dataset.dropAfter) { const location = locateStep(row.dataset.dropAfter); relocate(dragged, 'root', location.list[location.index + 1]?.id); }
+      else { const location = locateStep(row.dataset.id || row.dataset.loopDrag); relocate(dragged, location.parent?.id || 'root', location.step.id); }
+      dragged = null;
+    });
+  });
+}
 function getCaptureSize() { return state.captureSize || { width: 1920, height: 1080 }; }
 
 // 需求1：预览区标记拖动改坐标 —— 拖动中只改内联样式（不重渲染、不触发保存），松手才写回并经 renderAll 落盘
 const MARKER_DRAG_THRESHOLD_PX = 3;   // 小于该位移视为"点击"而非"拖动"
 
-function setupMarkerDrag(area, marker, index, size) {
+function setupMarkerDrag(area, marker, stepId, size) {
   marker.addEventListener('pointerdown', (event) => {
     if (!canEditPoints()) return;                       // 运行中禁止编辑（复用既有守卫，含暂停态）
     if (event.button !== 0) return;                     // 只响应主键
@@ -590,6 +726,7 @@ function setupMarkerDrag(area, marker, index, size) {
     marker.setPointerCapture(event.pointerId);
     marker.classList.add('dragging');
     checkpointPoints();                                 // 拖动前打一次快照，可整体撤销
+    const profile = currentProfile();
 
     const startX = event.clientX;
     const startY = event.clientY;
@@ -624,13 +761,14 @@ function setupMarkerDrag(area, marker, index, size) {
       const { ratioX, ratioY } = toRatio(upEvent.clientX, upEvent.clientY);
       const x = Math.max(0, Math.min(9999, Math.round(ratioX * size.width)));
       const y = Math.max(0, Math.min(9999, Math.round(ratioY * size.height)));
-      const points = currentProfile().steps;
-      if (!points[index]) return;
-      if (points[index].x === x && points[index].y === y) return;   // 数值无变化不落盘、不产生撤销步
-      points[index].x = x;
-      points[index].y = y;
+      if (profile !== currentProfile() || !canEditPoints()) return;
+      const point = locateStep(stepId)?.step;
+      if (!point || point.type !== 'click') return;
+      if (point.x === x && point.y === y) return;
+      point.x = x;
+      point.y = y;
       renderAll();                                      // 唯一保存出口（防抖保存）
-      toast(`坐标 ${index + 1} 已移动到 X ${x}，Y ${y}`);
+      toast(`${point.label} 已移动到 X ${x}，Y ${y}`);
     };
 
     marker.addEventListener('pointermove', move);
@@ -644,7 +782,7 @@ function renderMarkers() {
   const markers = $('markers');
   const size = getCaptureSize();
   markers.innerHTML = '';
-  const steps = currentProfile().steps;
+  const steps = allSteps();
   const ordinals = PointSettings.clickOrdinals(steps);
   steps.forEach((point, index) => {
     if (point.type !== 'click') return;
@@ -657,9 +795,11 @@ function renderMarkers() {
     marker.style.boxShadow = `0 2px 6px ${pointColorSoft(point)}`;
     marker.style.setProperty('--marker-ring', pointColorSoft(point));
     marker.dataset.step = String(index);
-    marker.title = `${point.label} · X${point.x} Y${point.y}${point.clickCount > 1 ? ` · ×${normalizeClicks(point.clickCount)}` : ''}　（可拖动调整位置）`;
+    marker.dataset.id = point.id;
+    const parent = locateStep(point.id)?.parent;
+    marker.title = `${parent ? parent.label : '主序列'} / ${point.label} · X${point.x} Y${point.y}${point.clickCount > 1 ? ` · ×${normalizeClicks(point.clickCount)}` : ''}　（可拖动调整位置）`;
     marker.addEventListener('click', (event) => { event.stopPropagation(); toast(`坐标 ${index + 1}：X ${point.x}，Y ${point.y}${point.clickCount > 1 ? ` · 连续点击 ${normalizeClicks(point.clickCount)} 次` : ''}`); });
-    setupMarkerDrag(area, marker, index, size);
+    setupMarkerDrag(area, marker, point.id, size);
     markers.appendChild(marker);
   });
   area.onmousemove = (event) => { const box = area.getBoundingClientRect(); const x = Math.round((event.clientX - box.left) / box.width * size.width); const y = Math.round((event.clientY - box.top) / box.height * size.height); $('cursorPosition').textContent = `X ${String(x).padStart(4,'0')}　Y ${String(y).padStart(4,'0')}`; };
@@ -741,9 +881,20 @@ function addPoint(x, y) {
   if (!canEditPoints()) return;
   const profile = currentProfile();
   if (profile.steps.filter((step) => step.type === 'click').length >= PointSettings.MAX_CLICK_STEPS) return toast('最多支持 100 个点击步骤');
-  profile.steps.push({ type: 'click', x, y, label: '', labelAuto: true, clickType: profile.defaultClickType, clickCount: 1 }); PointSettings.applyAutoLabels(profile.steps); renderAll(); toast(`已添加坐标 X ${x}，Y ${y}`);
+  insertStep({ id: PointSettings.newId(), type: 'click', x, y, label: '', labelAuto: true, clickType: profile.defaultClickType, clickCount: 1 }); toast(`已添加坐标 X ${x}，Y ${y}`);
 }
-function addDelay() { if (!canEditPoints()) return; const steps = currentProfile().steps; if (steps.length >= PointSettings.MAX_STEPS) return toast('最多支持 200 个步骤'); steps.push({ type: 'delay', ms: PointSettings.DEFAULT_DELAY_MS }); renderAll(); }
+function addDelay() { const step = { id: PointSettings.newId(), type: 'delay', ms: PointSettings.DEFAULT_DELAY_MS }; if (allSteps().length >= PointSettings.MAX_STEPS) return toast('最多支持 200 个步骤'); insertStep(step); }
+function addLoop() {
+  const parent = locateStep(selectedStepId)?.parent;
+  const loop = { id: PointSettings.newId(), type: 'loop', label: `循环 ${currentProfile().steps.filter(step => step.type === 'loop').length + 1}`, repeatCount: 1, steps: [] };
+  if (!insertStep(loop)) return;
+  const card = document.querySelector(`[data-loop-id="${loop.id}"]`);
+  card.scrollIntoView({ block: 'center' });
+  const input = card.querySelector('[data-setting="repeatCount"]');
+  input.focus({ preventScroll: true });
+  input.select();
+  toast(parent ? `已在“${parent.label}”之后添加循环` : '已添加循环块');
+}
 function updateRunDetail() { const p = currentProfile(); const clickSteps = p.steps.filter((step) => step.type === 'click'); const clicks = sumClicks(p.steps); const waits = p.steps.reduce((sum, step) => sum + (step.type === 'delay' ? step.ms : 0), 0); const repeatWaits = (clicks - clickSteps.length) * 50; const doubleWaits = clickSteps.filter((step) => step.clickType === PointSettings.DOUBLE_CLICK).reduce((sum, step) => sum + step.clickCount * 50, 0); const seconds = (100 + (waits + repeatWaits + doubleWaits) * p.loops + p.loopInterval * Math.max(0, p.loops - 1)) / 1000; const text = `共 ${p.steps.length} 步 · ${clicks * Math.max(1, p.loops)} 次点击 · 预计 ${formatDuration(seconds)}`; $('runDetail').textContent = text; return text; }
 function renderAll() { const p = currentProfile(); normalizeProfilePoints(p); $('profileTitle').textContent = p.name; $('clickType').value = p.defaultClickType; $('loopCount').value = p.loops; $('loopInterval').value = p.loopInterval; renderProfiles(); renderPoints(); publishFloatingState(); scheduleProfilesSave(); }
 function saveForm() {
@@ -871,6 +1022,25 @@ if (window.mouseclikDesktop?.onCaptureDiagnostic) {
     if (diagnostic?.message) toast(diagnostic.message);
   });
 }
+$('renameProfile').addEventListener('click', openProfileNameEditor);
+$('cancelProfileName').addEventListener('click', () => $('profileNameEditor').close());
+$('profileNameEditor').addEventListener('close', () => { profileNameTarget = null; });
+$('profileNameForm').addEventListener('submit', event => {
+  event.preventDefault();
+  if (!canEditPoints() || profileNameTarget !== currentProfile()) return;
+  const name = $('profileNameInput').value.trim();
+  if (!name || name.length > 80) {
+    $('profileNameError').textContent = '请输入 1–80 个字符的配置名称';
+    $('profileNameInput').setAttribute('aria-invalid', 'true');
+    $('profileNameInput').focus();
+    return;
+  }
+  profileNameTarget.name = name;
+  $('profileNameEditor').close();
+  renderAll();
+  toast('配置名称已更新');
+});
+$('addLoop').addEventListener('click', addLoop);
 $('undoPoints').addEventListener('click', () => restorePoints('undo'));
 $('redoPoints').addEventListener('click', () => restorePoints('redo'));
 $('cancelPoint').addEventListener('click', () => $('pointEditor').close());
@@ -880,7 +1050,7 @@ $('pointForm').addEventListener('submit', (event) => {
   const x = Number($('pointX').value), y = Number($('pointY').value), label = $('pointLabel').value.trim();
   if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x > 9999 || y > 9999 || !label) return toast('请输入有效的整数坐标和标签');
   const { profile, index } = pointEditorTarget;
-  if (index === null) profile.steps.push({ type: 'click', x, y, label, labelAuto: false, clickType: profile.defaultClickType, clickCount: 1 }); else updatePoint(profile.steps[index], { x, y, label, labelAuto: false }, profile);
+  if (index === null) insertStep({ id: PointSettings.newId(), type: 'click', x, y, label, labelAuto: false, clickType: profile.defaultClickType, clickCount: 1 }); else updatePoint(allSteps(profile)[index], { x, y, label, labelAuto: false }, profile);
   $('pointEditor').close(); renderAll();
 });
 document.addEventListener('keydown', (event) => {

@@ -1,11 +1,20 @@
 const { chromium } = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const path = require('node:path');
 const origin = process.env.MOUSECLIK_TEST_URL || 'http://127.0.0.1:28332';
+// RV-02：写操作要凭据。直连 API 与页面内（缺 preload）两条路径都必须带上同一个 token，
+// 否则这个套件只能在开着 MOUSECLIK_ALLOW_WRITES 之类后门时才"绿"。
+const TOKEN = process.env.MOUSECLIK_TEST_TOKEN || 'feature-check';
+const authStub = `window.mouseclikDesktop = { getServerToken: async () => '${TOKEN}' };`;
+const authHeaders = { 'X-MouseClik-Token': TOKEN };
+const ARTIFACTS = process.env.MOUSECLIK_TEST_ARTIFACTS || '.runtime-profile/point-settings';
+const shot = (name) => { fs.mkdirSync(ARTIFACTS, { recursive: true }); return path.join(ARTIFACTS, name); };
 (async () => {
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    await page.addInitScript(authStub);
     const errors = [];
     page.on('pageerror', (error) => errors.push(error.message));
     await page.route('**/api/windows', (route) => route.fulfill({ json: [] }));
@@ -14,7 +23,8 @@ const origin = process.env.MOUSECLIK_TEST_URL || 'http://127.0.0.1:28332';
       { x: 300, y: 200, label: 'Second', clickCount: 3, intervalAfterMs: 500 },
       { x: 500, y: 200, label: 'Last', clickCount: 1, intervalAfterMs: 900 }
     ] };
-    assert.ok((await page.request.put(`${origin}/api/profiles`, { data: { profiles: [profile], active: 0 } })).ok());
+    const seeded = await page.request.put(`${origin}/api/profiles`, { headers: authHeaders, data: { profiles: [profile], active: 0 } });
+    assert.ok(seeded.ok(), `seeding the profile must be authorized (HTTP ${seeded.status()})`);
     await page.goto(origin);
     await page.waitForFunction(() => document.querySelector('#profileTitle').textContent === 'Point settings');
     const count = () => page.locator('[data-setting="clickCount"]').first();
@@ -80,10 +90,9 @@ const origin = process.env.MOUSECLIK_TEST_URL || 'http://127.0.0.1:28332';
     await page.locator('.point-remove').last().click();
     assert.equal(await page.locator('.delay-row').count(), 1);
     await page.locator('#undoPoints').click(); await page.locator('#undoPoints').click();
-    fs.mkdirSync('.runtime-profile/point-settings', { recursive: true });
-    await page.screenshot({ path: '.runtime-profile/point-settings/desktop.png', fullPage: true });
+    await page.screenshot({ path: shot('desktop.png'), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.screenshot({ path: '.runtime-profile/point-settings/mobile.png', fullPage: true });
+    await page.screenshot({ path: shot('mobile.png'), fullPage: true });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     assert.deepEqual(errors, []);
     console.log('Point settings UI passed: stepper, strict input, Escape/blur/Enter, undo/redo, reorder, copy, disabled states, persistence, responsive layout');

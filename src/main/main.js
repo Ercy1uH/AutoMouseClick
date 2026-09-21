@@ -87,13 +87,15 @@ function hideFloatingWindow() {
 }
 
 function createFloatingWindow() {
+  const width = 300, height = 132;
   floatingWindow = new BrowserWindow({
-    width: 220,
-    height: 86,
-    minWidth: 220,
-    minHeight: 86,
-    maxWidth: 220,
-    maxHeight: 86,
+    width,
+    height,
+    useContentSize: true,
+    minWidth: width,
+    minHeight: height,
+    maxWidth: width,
+    maxHeight: height,
     frame: false,
     transparent: true,
     resizable: false,
@@ -110,7 +112,7 @@ function createFloatingWindow() {
     }
   });
   const workArea = screen.getPrimaryDisplay().workArea;
-  floatingWindow.setPosition(Math.max(workArea.x, workArea.x + workArea.width - 220 - 16), Math.max(workArea.y, workArea.y + workArea.height - 86 - 16));
+  floatingWindow.setPosition(Math.max(workArea.x, workArea.x + workArea.width - width - 16), Math.max(workArea.y, workArea.y + workArea.height - height - 16));
   floatingWindow.setAlwaysOnTop(true, 'floating');
   floatingWindow.loadURL(`http://127.0.0.1:${SERVER_PORT}/floating.html`).catch((error) => desktopLog('floating.load_error', { message: error.message }));
   floatingWindow.on('closed', () => { floatingWindow = null; });

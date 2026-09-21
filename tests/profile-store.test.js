@@ -10,7 +10,7 @@ function fixture(t) {
   return path.join(dir, 'profiles.json');
 }
 const profile = (point = {}) => ({ name: 'Example', points: [{ x: 10, y: 20, label: 'Point', ...point }], loops: 2 });
-test('v1 and v2 migrate to v4 with exact backup', (t) => {
+test('v1 and v2 migrate to v5 with exact backup', (t) => {
   for (const schemaVersion of [1, 2]) {
     const file = fixture(t);
     const data = JSON.stringify({ schemaVersion, active: 0, profiles: [{ ...profile({ clickCount: 3 }), pointInterval: 320 }] });
@@ -20,7 +20,7 @@ test('v1 and v2 migrate to v4 with exact backup', (t) => {
     assert.equal(store.profiles[0].steps[0].clickCount, 3);
     assert.equal(store.profiles[0].steps[0].type, 'click');
     assert.equal(store.profiles[0].pointInterval, undefined);
-    assert.equal(JSON.parse(fs.readFileSync(file)).schemaVersion, 4);
+    assert.equal(JSON.parse(fs.readFileSync(file)).schemaVersion, 5);
     assert.equal(fs.readFileSync(path.join(path.dirname(file), `profiles.v${schemaVersion}.backup.json`), 'utf8'), data);
     assert.equal(fs.existsSync(`${file}.tmp`), false);
     assert.deepEqual(new ProfileStore(file).profiles, store.profiles);
@@ -61,7 +61,7 @@ test('invalid execution fields are rejected without changing saved data', (t) =>
 test('missing or corrupt stores and failed writes do not crash', (t) => {
   const file = fixture(t);
   assert.equal(new ProfileStore(file).error, null);
-  for (const data of ['broken', JSON.stringify({ schemaVersion: 5, profiles: [] })]) {
+  for (const data of ['broken', JSON.stringify({ schemaVersion: 6, profiles: [] })]) {
     fs.writeFileSync(file, data);
     const store = new ProfileStore(file);
     assert.ok(store.error);

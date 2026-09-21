@@ -99,3 +99,20 @@ test('legacy points-only request converts to steps without a final delay', (t) =
   assert.equal(b.spawnPayload().steps[0].clickType, '右键单击');
   assert.equal(b.body().total, 6);
 });
+
+// 退出时最后一条没有换行结尾的记录必须被处理一次 —— 早先的实现把残行拼两遍，必然解析失败。
+// 用"退出码非 0"来观察：这时 finishRun 不会覆盖 completed，只有残行真的被解析才会出现 completed=7。
+test('a final worker line without a newline is parsed exactly once', async (t) => {
+  const b = backend(t);
+  b.event({ type: 'started', total: 16 });
+  b.child.stdout.emit('data', JSON.stringify({ type: 'progress', completed: 7, loop: 1, pointIndex: 0 })); // 无换行结尾
+  b.child.emit('close', 9, null);
+  await vm.runInContext('debugWriteQueue', b.context);
+
+  assert.equal(b.history()[0].completed, 7, '残行必须被当成一条完整记录处理');
+  assert.equal(b.history()[0].status, 'error');
+  assert.equal(b.history()[0].errorCode, 'WORKER_EXITED');
+  const debugDir = path.join(b.dir, 'debug');
+  const logs = fs.readdirSync(debugDir).map((name) => fs.readFileSync(path.join(debugDir, name), 'utf8')).join('');
+  assert.doesNotMatch(logs, /worker_output_parse_error/, '残行不得被重复拼接后解析失败');
+});

@@ -17,6 +17,7 @@ function render(run = state.run) {
   $('profileName').textContent = state.run.profileName || '未选择配置';
   $('targetName').textContent = `目标：${state.run.targetName || '未选择窗口'}`;
   $('statusText').textContent = statusLabel(status);
+  $('runDetail').textContent = state.run.detail || (status === 'running' ? `已完成 ${state.run.completed || 0} / ${state.run.total || 0}` : '等待开始');
   $('statusText').style.color = status === 'error' ? '#ffaaa4' : status === 'running' ? '#f3b67f' : '#75d2c2';
   $('progressBar').style.width = `${Math.max(0, Math.min(100, Number(state.run.progress) || 0))}%`;
   $('startButton').classList.toggle('running', active);

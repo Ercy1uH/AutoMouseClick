@@ -1,10 +1,17 @@
 const { chromium } = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const path = require('node:path');
+
+// 由 tests/run-suites.cjs 下发：隔离服务地址、共享 token、截图目录。
+// 单独手工跑时会回退到旧默认值以便调试，但正式回归一律走编排器。
+const ORIGIN = process.env.MOUSECLIK_TEST_URL || 'http://127.0.0.1:28332';
+const TOKEN = process.env.MOUSECLIK_TEST_TOKEN || 'feature-check';
+const ARTIFACTS = process.env.MOUSECLIK_TEST_ARTIFACTS || '.runtime-profile/feature-check';
+const shot = (name) => { fs.mkdirSync(ARTIFACTS, { recursive: true }); return path.join(ARTIFACTS, name); };
 
 // RV-02：本地服务对写操作要求凭据。真实运行时 token 由主进程经 preload 下发，
 // 这里的浏览器环境没有 preload，所以显式注入一个同名桩。
-const TOKEN = 'feature-check';
 const authStub = `window.mouseclikDesktop = { getServerToken: async () => '${TOKEN}' };`;
 
 (async () => {
@@ -21,9 +28,29 @@ const authStub = `window.mouseclikDesktop = { getServerToken: async () => '${TOK
       if (route.request().method() === 'PUT') profilePuts.push(route.request().postDataJSON());
       return route.fulfill({ json: { profiles: [], active: 0 } });
     });
-    await page.goto('http://127.0.0.1:28332');
+    await page.goto(ORIGIN);
     const rows = page.locator('.click-row');
     assert.equal(await rows.count(), 4);
+    assert.equal(await page.locator('.move-destination').count(), 0, 'step move menu is removed');
+    const profileName = page.locator('.profile-name').first();
+    const originalName = await profileName.textContent();
+    await profileName.evaluate(el => { el.textContent = '这是一个用于验证配置栏布局的很长配置名称'; });
+    for (const width of [1440, 980]) {
+      await page.setViewportSize({ width, height: 1000 });
+      const layouts = await page.locator('.profile-item').evaluateAll(items => items.map(item => {
+        const box = item.getBoundingClientRect();
+        const name = item.querySelector('.profile-name').getBoundingClientRect();
+        const sub = item.querySelector('.profile-sub').getBoundingClientRect();
+        const icon = item.querySelector('.profile-icon').getBoundingClientRect();
+        const more = item.querySelector('.profile-more').getBoundingClientRect();
+        return name.bottom <= sub.top && name.left >= icon.right && name.right <= more.left
+          && sub.right <= more.left && sub.bottom <= box.bottom;
+      }));
+      assert.ok(layouts.every(Boolean), `profile text must occupy separate rows within bounds at ${width}px`);
+      await page.locator('#profileList').screenshot({ path: shot(`profiles-${width}.png`) });
+    }
+    await profileName.evaluate((el, name) => { el.textContent = name; }, originalName);
+    await page.setViewportSize({ width: 1440, height: 1000 });
     await page.locator('.screen-content').click({ position: { x: 20, y: 20 } });
     assert.equal(await rows.count(), 5, 'workspace click creates a coordinate');
     assert.match(await page.locator('#toast').textContent(), /X/);
@@ -92,21 +119,23 @@ const authStub = `window.mouseclikDesktop = { getServerToken: async () => '${TOK
     await page.waitForFunction(() => !document.getElementById('refreshHistory').disabled);
     assert.equal(await page.locator('#historyMessage').textContent(), '暂无运行记录');
     await page.route('**/api/history', (route) => route.fulfill({ json: { entries: [
-      { runId: 'test', startedAt: '2026-09-08T08:00:00Z', endedAt: '2026-09-08T08:00:12Z', profileName: 'Test profile', windowTitle: 'Test window', status: 'completed', completed: 40, total: 40 },
-      { runId: 'error', startedAt: '2026-09-08T07:00:00Z', endedAt: '2026-09-08T07:00:01Z', status: 'error', completed: 1, total: 10, errorMessage: '<img src=x onerror=alert(1)>' }
+      { runId: 'test', startedAt: '2026-09-08T08:00:00Z', endedAt: '2026-09-08T08:00:12Z', profileName: 'Test profile', windowTitle: 'Test window', status: 'completed', completed: 40, total: 40, countUnit: 'actionGroup' },
+      { runId: 'error', startedAt: '2026-09-08T07:00:00Z', endedAt: '2026-09-08T07:00:01Z', status: 'error', completed: 1, total: 10, errorMessage: '<img src=x onerror=alert(1)>', countUnit: 'unconfirmed' }
     ] } }));
     await page.locator('#refreshHistory').click();
     await page.waitForFunction(() => !document.getElementById('refreshHistory').disabled);
     assert.equal(await page.locator('#historyRows tr').count(), 2);
     assert.equal(await page.locator('#historyRows img').count(), 0);
-    fs.mkdirSync('.runtime-profile/feature-check/screenshots', { recursive: true });
-    await page.screenshot({ path: '.runtime-profile/feature-check/screenshots/history.png' });
+    // RV-19：新记录按动作组计，v1 老记录标注口径未确认，两者必须在界面上可区分。
+    assert.equal(await page.locator('#historyRows tr').first().locator('td').nth(3).textContent(), '40 / 40');
+    assert.match(await page.locator('#historyRows tr').last().locator('td').nth(3).textContent(), /1 \/ 10（旧版口径未确认）/);
+    fs.mkdirSync(ARTIFACTS, { recursive: true });
+    await page.screenshot({ path: shot('history.png') });
     await page.locator('#closeHistory').click();
-    fs.mkdirSync('.runtime-profile/feature-check/screenshots', { recursive: true });
-    await page.screenshot({ path: '.runtime-profile/feature-check/screenshots/desktop.png', fullPage: true });
+    await page.screenshot({ path: shot('desktop.png'), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.locator('#addPoint').click();
-    await page.screenshot({ path: '.runtime-profile/feature-check/screenshots/mobile.png', fullPage: true });
+    await page.screenshot({ path: shot('mobile.png'), fullPage: true });
     assert.ok(await page.locator('#pointEditor').evaluate((el) => el.getBoundingClientRect().right <= innerWidth));
     await page.waitForTimeout(600);
     assert.ok(profilePuts.length >= 1, 'profile persistence sent at least one PUT');
@@ -115,23 +144,23 @@ const authStub = `window.mouseclikDesktop = { getServerToken: async () => '${TOK
     const addedPoint = profilePuts.at(-1).profiles[0].steps.find((point) => point.label === '<img src=x onerror=alert(1)>');
     assert.equal(addedPoint.clickCount, 7, 'clickCount must be persisted through PUT payloads');
     assert.deepEqual(errors, []);
-    const health = await (await page.request.get('http://127.0.0.1:28332/api/health', { headers: { 'X-MouseClik-Token': TOKEN } })).json();
+    const health = await (await page.request.get(`${ORIGIN}/api/health`, { headers: { 'X-MouseClik-Token': TOKEN } })).json();
     assert.equal(health.authorized, true);
     assert.equal(health.token, undefined, 'health must not echo the token');
     await page.locator('#cancelPoint').click();
     await page.close();
 
     const api = await browser.newContext();
-    await api.request.put('http://127.0.0.1:28332/api/profiles', { headers: { 'X-MouseClik-Token': TOKEN }, data: { profiles: [], active: 0 } });
+    await api.request.put(`${ORIGIN}/api/profiles`, { headers: { 'X-MouseClik-Token': TOKEN }, data: { profiles: [], active: 0 } });
     const persistencePage = await browser.newPage();
     await persistencePage.addInitScript(authStub);
     await persistencePage.route('**/api/windows', (route) => route.fulfill({ json: [] }));
-    await persistencePage.goto('http://127.0.0.1:28332');
+    await persistencePage.goto(ORIGIN);
     await persistencePage.locator('#addProfile').click();
     await persistencePage.close();
     let persistedProfiles = [];
     for (let attempt = 0; attempt < 20; attempt++) {
-      const response = await api.request.get('http://127.0.0.1:28332/api/profiles');
+      const response = await api.request.get(`${ORIGIN}/api/profiles`);
       persistedProfiles = (await response.json()).profiles;
       if (persistedProfiles.length === 4) break;
       await new Promise((resolve) => setTimeout(resolve, 50));
