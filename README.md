@@ -1,4 +1,4 @@
-# 点序 MouseClik
+# 点序 MouseClick
 
 基于 Electron 的 Windows 多点连点器，支持点击与延迟步骤、配置保存、运行历史、全局快捷键和悬浮控制条。
 
