@@ -10,7 +10,7 @@ const files = [
   'src/renderer/index.html', 'src/main/main.js', 'src/worker/native-click-worker.ps1', 'src/renderer/point-settings.js',
   'src/main/preload.js', 'src/core/profile-store.js', 'src/core/run-history.js', 'src/main/server.js', 'src/renderer/style.css',
   'scripts/prepare-github.cjs', 'scripts/verify-dist.cjs', 'scripts/clean-dist.cjs',
-  'releases/v1.5.0.md', 'releases/archive/BUILD_RECORD-1.4.2.md',
+  'releases/v1.5.0.md', 'releases/BUILD_RECORD-1.5.0.md', 'releases/archive/BUILD_RECORD-1.4.2.md',
   'tests/auth.test.js', 'tests/backend.test.js', 'tests/debug-log.test.js',
   'tests/desktop.test.js', 'tests/floating.test.js', 'tests/history.test.js',
   'tests/profile-store.test.js', 'tests/startup-state.test.js',
